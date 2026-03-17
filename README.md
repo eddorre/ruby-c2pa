@@ -1,6 +1,6 @@
 # ruby-c2pa
 
-A Ruby gem for signing and reading [C2PA](https://c2pa.org) content credentials in media files. Built on top of the official [c2pa-rs](https://github.com/contentauth/c2pa-rs) Rust library via FFI.
+A Ruby gem for signing and reading [C2PA](https://c2pa.org) content credentials in media files. Built on top of the official [c2pa-rs](https://github.com/contentauth/c2pa-rs) Rust library via a native extension.
 
 ## What is C2PA?
 
@@ -17,7 +17,7 @@ It is backed by Adobe, Microsoft, Google, the BBC, and others, and is increasing
 
 The C2PA specification is complex and security-sensitive. The reference implementation is [c2pa-rs](https://github.com/contentauth/c2pa-rs), an official Rust library maintained by the Content Authenticity Initiative. Rather than re-implementing the specification in Ruby (which would risk diverging from the spec or introducing security bugs), this gem wraps c2pa-rs directly.
 
-The binding layer is a thin Rust library that exposes a C-compatible API (`extern "C"` functions), which Ruby loads at runtime using the [ffi](https://github.com/ffi/ffi) gem. This means:
+The binding layer is a native Ruby extension written in Rust using [magnus](https://github.com/matsadler/magnus), which compiles directly into a `.bundle`/`.so` that Ruby loads like any other native extension. This means:
 
 - **Correctness** — you get the reference implementation, not a reimplementation
 - **Security** — cryptographic signing and manifest validation are handled by audited Rust code
@@ -149,7 +149,7 @@ puts manifest["claim_generator"]
 ### Checking the SDK version
 
 ```ruby
-puts C2PA.sdk_version  # => "0.78.2"
+puts C2PA.sdk_version  # => "0.78.3"  (depends on the c2pa-rs version bundled with the gem)
 ```
 
 ### Error handling
@@ -161,8 +161,17 @@ begin
   C2PA.sign(file: "photo.jpg", certificate: "cert.pem", key: "key.pem")
 rescue C2PA::SigningError => e
   puts "Signing failed: #{e.message}"
+end
+
+begin
+  C2PA.read(file: "photo.jpg")
 rescue C2PA::ReadError => e
   puts "Could not read manifest: #{e.message}"
+end
+
+# Or rescue any C2PA error broadly
+begin
+  C2PA.sign(file: "photo.jpg", certificate: "cert.pem", key: "key.pem")
 rescue C2PA::Error => e
   puts "C2PA error: #{e.message}"
 end
@@ -192,25 +201,24 @@ The format is detected automatically from the file extension.
 ```
 Ruby (C2PA.sign)
     │
-    │  ffi gem — passes strings as C pointers
+    │  native extension (magnus)
     ▼
-Rust (c2pa_sign_file)
+Rust (C2PA::Native.sign_file)
     │
     │  calls c2pa-rs Builder API
     ▼
 c2pa-rs — embeds signed manifest into the file
 ```
 
-The Rust layer (`ext/c2pa_native/src/lib.rs`) exposes four functions with a C-compatible ABI:
+The Rust extension (`ext/c2pa_native/src/lib.rs`) defines `C2PA::Native` with three methods:
 
-| Function | Description |
-|----------|-------------|
-| `c2pa_sign_file` | Sign a file and write the result |
-| `c2pa_read_file` | Read and return the manifest JSON |
-| `c2pa_last_error` | Return the last error message |
-| `c2pa_free_string` | Free a string allocated by Rust |
+| Method | Description |
+|--------|-------------|
+| `C2PA::Native.sign_file` | Sign a file and write the result |
+| `C2PA::Native.read_file` | Read and return the manifest JSON |
+| `C2PA::Native.sdk_version` | Return the c2pa-rs version string |
 
-Errors are stored in Rust thread-local storage and surfaced to Ruby as typed exceptions.
+Errors are raised as Ruby exceptions directly from Rust and surfaced as typed `C2PA::Error` subclasses.
 
 ## License
 
