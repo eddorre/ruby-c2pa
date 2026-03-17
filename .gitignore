@@ -1,0 +1,24 @@
+# Bundler — local gem installation path and config
+vendor/bundle/
+.bundle/
+
+# Gemfile.lock is committed for apps, but not for gems
+# (dependents should resolve their own versions)
+Gemfile.lock
+
+# Rust build artifacts
+ext/c2pa_native/target/
+
+# Compiled native extension
+lib/c2pa/c2pa_native.bundle
+lib/c2pa/c2pa_native.so
+lib/c2pa/c2pa_native.dll
+
+# rake-compiler temp directory
+tmp/
+
+# Built gem packages
+*.gem
+
+# macOS
+.DS_Store
