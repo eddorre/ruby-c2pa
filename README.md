@@ -179,7 +179,7 @@ manifest.add_ingredient(
 
 ### Signing a file
 
-The `output` path must not already exist — c2pa-rs will raise an error rather than overwrite an existing file.
+The `output` path must not already exist — `C2PA.sign` will raise a `C2PA::SigningError` if the file is already there.
 
 ```ruby
 manifest = C2PA::Manifest.new(title: "Sunset over the bay")
@@ -243,6 +243,8 @@ rescue C2PA::ReadError => e
 end
 
 # Or rescue any C2PA error broadly
+begin
+  C2PA.sign(file: "photo.jpg", output: "photo_signed.jpg", certificate: "cert.pem", key: "key.pem", manifest: manifest)
 rescue C2PA::Error => e
   puts "C2PA error: #{e.message}"
 end
@@ -289,7 +291,7 @@ The Rust extension (`ext/c2pa_native/src/lib.rs`) defines `C2PA::Native` with th
 | `C2PA::Native.read_file` | Read and return the manifest JSON |
 | `C2PA::Native.sdk_version` | Return the c2pa-rs version string |
 
-Errors are raised as Ruby exceptions directly from Rust and surfaced as typed `C2PA::Error` subclasses.
+Input validation (missing files, invalid manifests) is handled in Ruby before calling into Rust. Errors from the native layer are caught and re-raised as typed `C2PA::Error` subclasses.
 
 ## License
 

@@ -28,7 +28,14 @@ module C2PA
   #     manifest:    manifest
   #   )
   def self.sign(file:, output:, certificate:, key:, algorithm: "es256", manifest:)
-    Native.sign_file(file, output, certificate, key, algorithm, manifest.to_json)
+    manifest_json = manifest.to_json
+
+    raise SigningError, "Source file not found: '#{file}'"             unless File.exist?(file)
+    raise SigningError, "Certificate file not found: '#{certificate}'" unless File.exist?(certificate)
+    raise SigningError, "Key file not found: '#{key}'"                 unless File.exist?(key)
+    raise SigningError, "Output file already exists: '#{output}'"      if File.exist?(output)
+
+    Native.sign_file(file, output, certificate, key, algorithm, manifest_json)
   rescue RuntimeError => e
     raise SigningError, e.message
   end
