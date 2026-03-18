@@ -1,5 +1,4 @@
 use std::path::Path;
-
 use c2pa::{create_signer, Builder, Reader, SigningAlg};
 use magnus::{function, prelude::*, Error, Ruby};
 
@@ -51,21 +50,8 @@ fn do_sign_file(
     let mut builder = Builder::from_json(json)
         .map_err(|e| format!("Invalid manifest JSON: {}", e))?;
 
-    // Always write to a temp file then rename so that source == dest is safe
-    let tmp_path = format!("{}.c2pa_tmp_{}", dest_path, std::process::id());
-
-    match builder.sign_file(&*signer, source_path, &tmp_path) {
-        Ok(_) => {}
-        Err(e) => {
-            let _ = std::fs::remove_file(&tmp_path);
-            return Err(format!("Signing failed: {}", e).into());
-        }
-    }
-
-    std::fs::rename(&tmp_path, dest_path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp_path);
-        format!("Failed to move signed file to '{}': {}", dest_path, e)
-    })?;
+    builder.sign_file(&*signer, source_path, dest_path)
+        .map_err(|e| format!("Signing failed: {}", e))?;
 
     Ok(())
 }
