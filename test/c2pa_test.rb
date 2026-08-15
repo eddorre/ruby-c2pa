@@ -161,10 +161,13 @@ class C2PATest < Minitest::Test
   # Formats claimed but never exercised are how the PDF row survived: c2pa-rs
   # cannot write C2PA data to a PDF at all, and nothing caught it.
   #
-  # Fixtures are generated locally (sips, cwebp, afconvert) and committed, so
-  # the suite needs no media tooling to run. tiny.mp4 is an audio-only ISO BMFF
-  # file — still a valid MP4, and it exercises the BMFF path without committing
-  # a video.
+  # Fixtures are synthesised by test/fixtures/generate.sh and committed, so the
+  # suite needs no media tooling to run and carries no third-party content.
+  #
+  # They are not placeholders. C2PA writes manifests into real container
+  # structures — APP11 segments, iTXt chunks, IFD entries, BMFF uuid boxes,
+  # RIFF chunks, ID3 frames — so the fixtures carry real image detail, real
+  # audio samples, real video frames, and real EXIF in the JPEG. 92 KB total.
 
   SIGNABLE_FORMATS = {
     "tiny.jpg"  => "JPEG",
@@ -172,8 +175,11 @@ class C2PATest < Minitest::Test
     "tiny.webp" => "WebP",
     "tiny.tiff" => "TIFF",
     "tiny.avif" => "AVIF",
+    "tiny.jxl"  => "JPEG XL",
     "tiny.wav"  => "WAV",
-    "tiny.mp4"  => "MP4 (BMFF)"
+    "tiny.mp3"  => "MP3",
+    "tiny.mp4"  => "MP4",
+    "tiny.mov"  => "MOV (QuickTime)"
   }.freeze
 
   SIGNABLE_FORMATS.each do |fixture, label|
