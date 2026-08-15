@@ -53,30 +53,15 @@ jobs:
           workspaces: ext/c2pa_native
 
       - name: Fetch c2pa-rs development certificates
-        # The signing tests need an X.509 certificate chain and key. These are
-        # the public c2pa-rs development fixtures — not secrets. Files signed
-        # with them carry a signingCredential.untrusted warning, which does not
-        # make a manifest invalid.
+        # `rake test` depends on this task, so this step is not strictly
+        # required — it is run explicitly so a download failure is attributed
+        # to the certificates rather than surfacing as a test failure.
         #
-        # -f makes curl exit non-zero on an HTTP error, so a moved or deleted
-        # fixture fails the run. The suite must never quietly skip its signing
-        # tests and report green.
+        # The task aborts on a failed or empty download, and the suite flunks
+        # rather than skips when the certificates are absent, so the signing
+        # tests can never be silently omitted from a green run.
         run: |
-          curl -sSfL -o test_cert.pem \
-            https://raw.githubusercontent.com/contentauth/c2pa-rs/main/sdk/tests/fixtures/certs/es256.pub
-          curl -sSfL -o test_key.pem \
-            https://raw.githubusercontent.com/contentauth/c2pa-rs/main/sdk/tests/fixtures/certs/es256.pem
-
-      - name: Verify certificates are usable
-        run: |
-          for f in test_cert.pem test_key.pem; do
-            if [ ! -s "$f" ]; then
-              echo "::error::$f is missing or empty — signing tests would not be meaningful"
-              exit 1
-            fi
-          done
-          grep -q "BEGIN CERTIFICATE" test_cert.pem
-          grep -q "BEGIN" test_key.pem
+          bundle exec rake fixtures:certs
 
       - name: Compile the native extension
         run: bundle exec rake compile
