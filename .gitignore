@@ -17,6 +17,11 @@ lib/c2pa/c2pa_native.dll
 # rake-compiler temp directory
 tmp/
 
+# Signing certificates fetched by `rake fixtures:certs`. These are the public
+# c2pa-rs development fixtures rather than secrets, but a PEM private key in a
+# content-authenticity repository invites confusion and secret-scanning alerts.
+test/fixtures/certs/
+
 # Built gem packages
 *.gem
 
