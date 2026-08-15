@@ -252,7 +252,8 @@ end
 
 ## Supported file formats
 
-Signing and reading are supported for any format supported by c2pa-rs, including:
+Each format below has a fixture and a signing test in the suite: the file is
+signed, read back, and asserted to validate.
 
 | Format | MIME type |
 |--------|-----------|
@@ -261,13 +262,25 @@ Signing and reading are supported for any format supported by c2pa-rs, including
 | WebP | `image/webp` |
 | TIFF | `image/tiff` |
 | AVIF | `image/avif` |
-| MP4 / M4V | `video/mp4` |
-| MOV | `video/quicktime` |
-| MP3 | `audio/mpeg` |
+| MP4 | `video/mp4` |
 | WAV | `audio/wav` |
-| PDF | `application/pdf` |
 
 The format is detected automatically from the file extension.
+
+### Not supported
+
+**PDF cannot be signed.** c2pa-rs can read C2PA data out of a PDF but has no
+writer for it — `get_writer` returns `None` and `save_cai_store` returns
+`NotImplemented` — so `C2PA.sign` raises `C2PA::SigningError` with
+`type is unsupported`. This is true at every c2pa-rs version. Earlier releases
+of this gem listed PDF as supported; that was never correct.
+
+### Untested
+
+c2pa-rs supports more formats than the table above, including MOV
+(`video/quicktime`), MP3 (`audio/mpeg`) and JPEG XL. They are likely to work,
+but this gem has no fixtures for them and makes no claim. If you need one,
+open an issue — a fixture and a test is all it takes to move it up.
 
 ## How it works
 
