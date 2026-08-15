@@ -1,5 +1,6 @@
 require "minitest/autorun"
 require "tmpdir"
+require "tempfile"
 require "fileutils"
 require "c2pa"
 
@@ -38,6 +39,27 @@ class C2PATest < Minitest::Test
 
   def created_manifest(title: "Test")
     C2PA::Manifest.new(title: title).add_action(C2PA::Actions::CREATED)
+  end
+
+  # Sign a fixture and yield the active manifest exactly as c2pa-rs reads it
+  # back out of the finished asset.
+  #
+  # Asserting against Manifest#to_json only proves the builder agrees with
+  # itself. Going through the file covers JSON generation, the magnus boundary,
+  # CBOR encoding and the C2PA container as well.
+  def read_back(manifest, fixture: "tiny.jpg")
+    sign_fixture(fixture, manifest) do |output|
+      result = C2PA.read(file: output)
+      yield result["manifests"].fetch(result["active_manifest"]), result
+    end
+  end
+
+  # The actions recorded in a signed manifest.
+  def signed_actions(active)
+    active.fetch("assertions")
+          .find { |assertion| assertion["label"] == "c2pa.actions.v2" }
+          .fetch("data")
+          .fetch("actions")
   end
 
   def test_version_is_a_string
@@ -88,37 +110,19 @@ class C2PATest < Minitest::Test
     unsigned&.unlink
   end
 
-  def test_manifest_actions_constants
-    assert_equal "c2pa.created",   C2PA::Actions::CREATED
-    assert_equal "c2pa.edited",    C2PA::Actions::EDITED
-    assert_equal "c2pa.published", C2PA::Actions::PUBLISHED
-  end
+  # ─── Constant tables ───────────────────────────────────────────────────────
+  #
+  # No external oracle exists for these. c2pa-rs does not validate action names
+  # — a bogus one signs and reads back clean — so their correctness comes from
+  # the specification they were transcribed from, not from anything testable
+  # here. What can be checked is what goes wrong in a hand-typed list of 25
+  # strings: a duplicate, or a mistyped namespace.
 
-  def test_manifest_chaining
-    manifest = C2PA::Manifest.new(title: "Test")
-      .add_action(C2PA::Actions::CREATED)
-      .add_action(C2PA::Actions::EDITED)
+  def test_action_constants_are_distinct_and_namespaced
+    values = C2PA::Actions.constants.map { |name| C2PA::Actions.const_get(name) }
 
-    json = JSON.parse(manifest.to_json)
-    actions = json["assertions"].first["data"]["actions"]
-    assert_equal 2, actions.length
-    assert_equal "c2pa.created", actions[0]["action"]
-    assert_equal "c2pa.edited",  actions[1]["action"]
-  end
-
-  def test_manifest_software_agent_defaults_to_gem
-    manifest = C2PA::Manifest.new(title: "Test").add_action(C2PA::Actions::CREATED)
-    json = JSON.parse(manifest.to_json)
-    agent = json["assertions"].first["data"]["actions"].first["softwareAgent"]
-    assert_equal "ruby-c2pa/#{C2PA::VERSION}", agent
-  end
-
-  def test_manifest_software_agent_can_be_overridden
-    manifest = C2PA::Manifest.new(title: "Test")
-      .add_action(C2PA::Actions::CREATED, software_agent: "Acme Editor/2.0")
-    json = JSON.parse(manifest.to_json)
-    agent = json["assertions"].first["data"]["actions"].first["softwareAgent"]
-    assert_equal "Acme Editor/2.0", agent
+    assert_equal values.length, values.uniq.length, "duplicate action string"
+    values.each { |value| assert_match(/\Ac2pa\.[a-zA-Z.]+\z/, value) }
   end
 
   # ─── Signing ───────────────────────────────────────────────────────────────
@@ -173,16 +177,90 @@ class C2PATest < Minitest::Test
                     "0.78.4 and can resolve atree 0.5.3, which aborts the process on TIFF input"
   end
 
-  def test_manifest_add_assertion
+  # ─── Round trip: what actually lands in the signed file ────────────────────
+
+  def test_title_survives_signing
+    read_back(created_manifest(title: "Sunset over the bay")) do |active, _|
+      assert_equal "Sunset over the bay", active["title"]
+    end
+  end
+
+  def test_action_order_survives_signing
+    manifest = created_manifest.add_action(C2PA::Actions::EDITED)
+                               .add_action(C2PA::Actions::PUBLISHED)
+
+    read_back(manifest) do |active, _|
+      assert_equal %w[c2pa.created c2pa.edited c2pa.published],
+                   signed_actions(active).map { |action| action["action"] }
+    end
+  end
+
+  def test_default_software_agent_survives_signing
+    read_back(created_manifest) do |active, _|
+      assert_equal "ruby-c2pa/#{C2PA::VERSION}",
+                   signed_actions(active).first["softwareAgent"]
+    end
+  end
+
+  def test_custom_software_agent_survives_signing
     manifest = C2PA::Manifest.new(title: "Test")
-      .add_action(C2PA::Actions::CREATED)
-      .add_assertion(
-        label: "stds.schema-org.CreativeWork",
-        data: { "@context" => "https://schema.org", "@type" => "CreativeWork" }
-      )
-    json = JSON.parse(manifest.to_json)
-    labels = json["assertions"].map { |a| a["label"] }
-    assert_includes labels, "c2pa.actions.v2"
-    assert_includes labels, "stds.schema-org.CreativeWork"
+                             .add_action(C2PA::Actions::CREATED,
+                                         software_agent: "Acme Editor/2.0")
+
+    read_back(manifest) do |active, _|
+      assert_equal "Acme Editor/2.0", signed_actions(active).first["softwareAgent"]
+    end
+  end
+
+  def test_when_time_survives_signing
+    manifest = C2PA::Manifest.new(title: "Test")
+                             .add_action(C2PA::Actions::CREATED,
+                                         when_time: "2026-03-17T10:00:00Z")
+
+    read_back(manifest) do |active, _|
+      assert_equal "2026-03-17T10:00:00Z", signed_actions(active).first["when"]
+    end
+  end
+
+  # Optional at this c2pa-rs version, but it must still survive when supplied.
+  def test_digital_source_type_survives_signing
+    source_type = "http://cv.iptc.org/newscodes/digitalsourcetype/digitalCapture"
+    manifest = C2PA::Manifest.new(title: "Test")
+                             .add_action(C2PA::Actions::CREATED,
+                                         digital_source_type: source_type)
+
+    read_back(manifest) do |active, _|
+      assert_equal source_type, signed_actions(active).first["digitalSourceType"]
+    end
+  end
+
+  def test_custom_assertion_survives_signing
+    manifest = created_manifest.add_assertion(
+      label: "stds.schema-org.CreativeWork",
+      data: { "@context" => "https://schema.org", "@type" => "CreativeWork",
+              "author" => [{ "@type" => "Person", "name" => "Jane Smith" }] }
+    )
+
+    read_back(manifest) do |active, _|
+      creative_work = active.fetch("assertions")
+                            .find { |a| a["label"] == "stds.schema-org.CreativeWork" }
+      refute_nil creative_work, "custom assertion missing from the signed file"
+      assert_equal "Jane Smith", creative_work.dig("data", "author", 0, "name")
+    end
+  end
+
+  def test_ingredient_survives_signing
+    manifest = created_manifest.add_ingredient(
+      title:       "original.jpg",
+      format:      "image/jpeg",
+      instance_id: "xmp:iid:original-uuid-here"
+    )
+
+    read_back(manifest) do |active, _|
+      ingredient = Array(active["ingredients"]).first
+      refute_nil ingredient, "ingredient missing from the signed file"
+      assert_equal "original.jpg", ingredient["title"]
+      assert_equal "parentOf",     ingredient["relationship"]
+    end
   end
 end
