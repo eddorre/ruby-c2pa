@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Superseded runs are cancelled rather than left to finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Ruby ${{ matrix.ruby }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS is not redundant here: the invalid free behind the TIFF crash
+        # (#2) was surfaced by macOS libmalloc, which aborts on a bad free.
+        # glibc may corrupt the heap silently instead, so a Linux-only matrix
+        # could miss that class of bug entirely.
+        os: [ubuntu-latest, macos-latest]
+        ruby: ["3.4"]
+
+    env:
+      # Skip LTO and codegen-units=1 for tests. The release profile in
+      # ext/c2pa_native/Cargo.toml is tuned for shipping, and compiling 425
+      # crates — including OpenSSL from source — with it on every push is
+      # needless. Note this means CI exercises a debug build, which has integer
+      # overflow checks the released artifact does not.
+      RB_SYS_CARGO_PROFILE: dev
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ext/c2pa_native
+
+      - name: Fetch c2pa-rs development certificates
+        # The signing tests need an X.509 certificate chain and key. These are
+        # the public c2pa-rs development fixtures — not secrets. Files signed
+        # with them carry a signingCredential.untrusted warning, which does not
+        # make a manifest invalid.
+        #
+        # -f makes curl exit non-zero on an HTTP error, so a moved or deleted
+        # fixture fails the run. The suite must never quietly skip its signing
+        # tests and report green.
+        run: |
+          curl -sSfL -o test_cert.pem \
+            https://raw.githubusercontent.com/contentauth/c2pa-rs/main/sdk/tests/fixtures/certs/es256.pub
+          curl -sSfL -o test_key.pem \
+            https://raw.githubusercontent.com/contentauth/c2pa-rs/main/sdk/tests/fixtures/certs/es256.pem
+
+      - name: Verify certificates are usable
+        run: |
+          for f in test_cert.pem test_key.pem; do
+            if [ ! -s "$f" ]; then
+              echo "::error::$f is missing or empty — signing tests would not be meaningful"
+              exit 1
+            fi
+          done
+          grep -q "BEGIN CERTIFICATE" test_cert.pem
+          grep -q "BEGIN" test_key.pem
+
+      - name: Compile the native extension
+        run: bundle exec rake compile
+
+      - name: Report the c2pa-rs version under test
+        # Block scalar, and no Ruby string interpolation: in a plain YAML
+        # scalar " #" opens a comment, which silently truncates the command.
+        run: |
+          bundle exec ruby -Ilib -e 'require "c2pa"; puts "c2pa-rs " + C2PA.sdk_version'
+
+      - name: Run tests
+        run: bundle exec rake test
