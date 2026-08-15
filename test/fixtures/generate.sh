@@ -2,11 +2,9 @@
 #
 # Regenerate the media fixtures used by the test suite.
 #
-# The fixtures are committed, so you only need this to change or add one.
-# Requires: ffmpeg, cjxl (jpeg-xl), exiftool.
-#
-#     brew install ffmpeg jpeg-xl exiftool
-#     ./test/fixtures/generate.sh
+# THE FIXTURES ARE COMMITTED. Running the tests needs none of the tools below —
+# only regenerating does. `bundle exec rake test` works from a clean checkout
+# with nothing installed.
 #
 # Everything here is synthesised from ffmpeg's built-in generators, so the
 # fixtures carry no third-party content and no licence obligations.
@@ -17,6 +15,11 @@
 # and a file with no actual content exercises almost none of that. These carry
 # real image detail, real audio samples, real video frames and real EXIF, while
 # staying small enough not to weigh down the repository.
+#
+# Regeneration is byte-identical on the same toolchain — re-running this on the
+# machine that produced the committed fixtures leaves git clean. Across
+# different encoder versions or platforms expect the bytes to move, so review
+# the diff rather than assuming a no-op.
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -28,7 +31,46 @@ AUDIO_RATE=22050   # Hz
 TONE=440           # Hz
 
 say() { printf '  %-12s' "$1"; }
-size_of() { printf '%s bytes\n' "$(stat -f%z "$1")"; }
+
+# stat takes different flags on BSD and GNU, and this script should run on both.
+size_of() {
+  local bytes
+  bytes=$(stat -f%z "$1" 2>/dev/null || stat -c%s "$1" 2>/dev/null || echo "?")
+  printf '%s bytes\n' "$bytes"
+}
+
+# Fail with something actionable rather than "command not found" from halfway
+# through a run that has already overwritten some fixtures.
+missing=()
+for tool in ffmpeg cwebp cjxl exiftool; do
+  command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+done
+if [ ${#missing[@]} -gt 0 ]; then
+  cat >&2 <<MSG
+Missing: ${missing[*]}
+
+  macOS   brew install ffmpeg webp jpeg-xl exiftool
+  Debian  sudo apt install ffmpeg webp libjxl-tools libimage-exiftool-perl
+
+The fixtures are committed, so this is only needed to regenerate them.
+Running the test suite requires none of it.
+MSG
+  exit 1
+fi
+
+# ffmpeg builds vary in which encoders they carry — Homebrew's ships without
+# libwebp and libaom-av1, which is why webp and JPEG XL use their own tools.
+# Check up front rather than failing partway through.
+missing_encoders=()
+for encoder in libx264 libsvtav1 libmp3lame aac png tiff mjpeg; do
+  ffmpeg -hide_banner -encoders 2>/dev/null | grep -qE "^ [A-Z.]+ $encoder " \
+    || missing_encoders+=("$encoder")
+done
+if [ ${#missing_encoders[@]} -gt 0 ]; then
+  echo "This ffmpeg lacks required encoders: ${missing_encoders[*]}" >&2
+  echo "Install a fuller build, e.g. 'brew install ffmpeg' on macOS." >&2
+  exit 1
+fi
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
