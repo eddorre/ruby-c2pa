@@ -155,6 +155,96 @@ class C2PATest < Minitest::Test
     end
   end
 
+  # ─── Signing algorithms ────────────────────────────────────────────────────
+  #
+  # alg_from_str in ext/c2pa_native/src/lib.rs maps seven names and has an
+  # error branch for anything else. None of it was exercised.
+  #
+  # Each algorithm needs a key of the matching type, so the suite generates a
+  # chain per key type (see test/fixtures/generate_certs.rb). The PS algorithms
+  # share one RSA key, differing only in the digest applied at signing time.
+
+  ALGORITHM_KEYS = {
+    "es256"   => "es256",
+    "es384"   => "es384",
+    "es512"   => "es512",
+    "ps256"   => "ps256",
+    "ps384"   => "ps256",
+    "ps512"   => "ps256",
+    "ed25519" => "ed25519"
+  }.freeze
+
+  def certificate_for(key_name)
+    [File.join(FIXTURES, "certs", "#{key_name}.pub"),
+     File.join(FIXTURES, "certs", "#{key_name}.pem")]
+  end
+
+  ALGORITHM_KEYS.each do |algorithm, key_name|
+    define_method("test_signs_with_#{algorithm}") do
+      cert, key = certificate_for(key_name)
+      unless File.size?(cert) && File.size?(key)
+        flunk "Missing #{key_name} certificate. Run `bundle exec rake fixtures:certs`."
+      end
+
+      dir = Dir.mktmpdir
+      output = File.join(dir, "signed.jpg")
+      C2PA.sign(file: File.join(FIXTURES, "tiny.jpg"), output: output,
+                certificate: cert, key: key, manifest: created_manifest,
+                algorithm: algorithm)
+
+      result = C2PA.read(file: output)
+      active = result["manifests"].fetch(result["active_manifest"])
+
+      # c2pa-rs reports the algorithm capitalised, e.g. "Es256".
+      assert_equal algorithm.capitalize, active.dig("signature_info", "alg"),
+                   "#{algorithm} was not recorded in the signed manifest"
+      assert_includes %w[Valid Trusted], result["validation_state"],
+                      "#{algorithm} signed but does not validate"
+    ensure
+      FileUtils.remove_entry(dir) if dir && File.exist?(dir)
+    end
+  end
+
+  def test_default_algorithm_is_es256
+    read_back(created_manifest) do |active, _|
+      assert_equal "Es256", active.dig("signature_info", "alg")
+    end
+  end
+
+  def test_unknown_algorithm_is_rejected_and_writes_nothing
+    assert_certificates_present
+    dir = Dir.mktmpdir
+    output = File.join(dir, "signed.jpg")
+
+    error = assert_raises(C2PA::SigningError) do
+      C2PA.sign(file: File.join(FIXTURES, "tiny.jpg"), output: output,
+                certificate: CERT, key: KEY, manifest: created_manifest,
+                algorithm: "sha256-with-wishful-thinking")
+    end
+
+    assert_match(/unknown signing algorithm/i, error.message)
+    assert_match(/es256/, error.message, "the error should name the valid options")
+    refute File.exist?(output), "no file should be written for an unusable algorithm"
+  ensure
+    FileUtils.remove_entry(dir) if dir && File.exist?(dir)
+  end
+
+  def test_algorithm_mismatched_with_the_key_is_rejected
+    cert, key = certificate_for("es256")
+    dir = Dir.mktmpdir
+    output = File.join(dir, "signed.jpg")
+
+    # ps256 is RSA-PSS; this key is EC P-256. Signing must fail rather than
+    # produce a file nobody can verify.
+    assert_raises(C2PA::SigningError) do
+      C2PA.sign(file: File.join(FIXTURES, "tiny.jpg"), output: output,
+                certificate: cert, key: key, manifest: created_manifest,
+                algorithm: "ps256")
+    end
+  ensure
+    FileUtils.remove_entry(dir) if dir && File.exist?(dir)
+  end
+
   # ─── Format coverage ───────────────────────────────────────────────────────
   #
   # Every format the README advertises as signable gets a fixture and a test.

@@ -14,45 +14,28 @@ Rake::TestTask.new(:test) do |t|
   t.verbose = true
 end
 
-# The signing tests need an X.509 certificate chain and key. These are the
-# public c2pa-rs development fixtures, not secrets — but a PEM private key
-# committed to a content-authenticity library reads badly and trips secret
-# scanning, so they are fetched into an ignored directory instead.
+# The signing tests need an X.509 certificate chain and key per algorithm.
+# These are generated locally rather than downloaded: it needs no network, it
+# covers every algorithm the gem accepts rather than only ES256, and it keeps
+# third-party material out of the repository entirely.
 #
-# Files signed with them carry a signingCredential.untrusted warning, which
-# does not make a manifest invalid.
+# The generated chains are rooted in a CA created here, so signed assets carry
+# a signingCredential.untrusted warning. That does not make a manifest invalid.
+#
+# They are written to an ignored directory rather than committed: a PEM private
+# key in a content-authenticity repository reads badly and trips secret
+# scanning, and regenerating them costs a fraction of a second.
 namespace :fixtures do
-  CERT_DIR = "test/fixtures/certs".freeze
-  CERT_SOURCE = "https://raw.githubusercontent.com/contentauth/c2pa-rs/main/sdk/tests/fixtures/certs".freeze
-  CERT_FILES = {
-    "es256.pub" => "certificate chain",
-    "es256.pem" => "private key"
-  }.freeze
-
-  desc "Download the c2pa-rs development signing certificates"
+  desc "Generate the signing certificates used by the test suite"
   task :certs do
-    require "fileutils"
-    require "open-uri"
+    require_relative "test/fixtures/generate_certs"
+    CertificateFixtures.generate_all
+  end
 
-    FileUtils.mkdir_p(CERT_DIR)
-
-    CERT_FILES.each do |name, description|
-      path = File.join(CERT_DIR, name)
-      next if File.size?(path)
-
-      url = "#{CERT_SOURCE}/#{name}"
-      print "Fetching #{description} (#{name})... "
-      begin
-        content = URI.parse(url).open(&:read)
-      rescue StandardError => e
-        abort "\nCould not download #{url}: #{e.class}: #{e.message}\n" \
-              "The signing tests cannot run without it. See README for details."
-      end
-
-      abort "\n#{url} returned no content" if content.to_s.empty?
-      File.write(path, content)
-      puts "ok"
-    end
+  desc "Regenerate the signing certificates, replacing any that exist"
+  task :certs_force do
+    require_relative "test/fixtures/generate_certs"
+    CertificateFixtures.generate_all(force: true)
   end
 end
 
