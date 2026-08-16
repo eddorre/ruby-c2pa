@@ -66,7 +66,8 @@ module C2PA
     # Serialize to the JSON structure expected by c2pa-rs.
     #
     # @return [String]
-    # @raise [C2PA::InvalidManifestError] if no actions have been added
+    # @raise [C2PA::InvalidManifestError] if no actions have been added, or if
+    #   any value cannot be represented as JSON
     def to_json
       raise InvalidManifestError, "at least one action is required" if @actions.empty?
 
@@ -79,7 +80,16 @@ module C2PA
       }
       manifest["ingredients"] = @ingredients unless @ingredients.empty?
 
-      JSON.generate(manifest)
+      begin
+        JSON.generate(manifest)
+      rescue JSON::GeneratorError => e
+        # Typically a string that is not valid UTF-8 — a filename or caption
+        # read in another encoding and passed through untouched. Without this
+        # the caller gets a JSON::GeneratorError, which is not a C2PA::Error
+        # and so escapes `rescue C2PA::Error`.
+        raise InvalidManifestError,
+              "manifest contains text that cannot be encoded as JSON: #{e.message}"
+      end
     end
   end
 end
