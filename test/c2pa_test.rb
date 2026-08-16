@@ -319,6 +319,142 @@ class C2PATest < Minitest::Test
                     "0.78.4 and can resolve atree 0.5.3, which aborts the process on TIFF input"
   end
 
+  # ─── Conformance: what c2pa-rs actually enforces ───────────────────────────
+  #
+  # These sign manifests the builder would not produce, bypassing it entirely,
+  # and record c2pa-rs's verdict. Two reasons:
+  #
+  # 1. Rules this gem enforces must be pinned to a rule the SDK actually has.
+  #    A test asserting "the builder raises" only proves we implemented an
+  #    opinion, not that the opinion is correct.
+  #
+  # 2. Rules the SDK does *not* enforce are recorded too, so that if upstream
+  #    starts enforcing one, we find out from a failing test rather than from
+  #    a user whose files stopped validating.
+  #
+  # Verdicts below are from c2pa-rs 0.78.8. Rules introduced in 0.90 are
+  # deliberately absent — asserting them here would fail for the right reason
+  # at the wrong time. They arrive with the upgrade, in #18 and #19.
+
+  ACTIONS_LABEL = "c2pa.actions.v2".freeze
+  CREATED_ACTION = { "action" => "c2pa.created" }.freeze
+  PARENT_INGREDIENT = {
+    "title" => "original.jpg", "format" => "image/jpeg",
+    "instance_id" => "xmp:iid:original", "relationship" => "parentOf"
+  }.freeze
+
+  # Sign a definition the builder would refuse, so c2pa-rs can rule on it.
+  def failure_codes_for(actions, ingredients: nil)
+    assert_certificates_present
+
+    definition = {
+      "title" => "conformance",
+      "assertions" => [{ "label" => ACTIONS_LABEL, "data" => { "actions" => actions } }]
+    }
+    definition["ingredients"] = ingredients if ingredients
+
+    unchecked = Object.new
+    unchecked.define_singleton_method(:to_json) { JSON.generate(definition) }
+
+    dir = Dir.mktmpdir
+    output = File.join(dir, "signed.jpg")
+    C2PA.sign(file: File.join(FIXTURES, "tiny.jpg"), output: output,
+              certificate: CERT, key: KEY, manifest: unchecked)
+
+    Array(C2PA.read(file: output).dig("validation_results", "activeManifest", "failure"))
+      .map { |failure| failure["code"] }
+      .reject { |code| code == "signingCredential.untrusted" }
+      .uniq
+  ensure
+    FileUtils.remove_entry(dir) if dir && File.exist?(dir)
+  end
+
+  ENFORCED_RULES = {
+    "first action is not created or opened" => {
+      actions: [{ "action" => "c2pa.edited" }],
+      code:    "assertion.action.malformed"
+    },
+    "an action carries an empty action string" => {
+      actions: [CREATED_ACTION, { "action" => "" }],
+      code:    "assertion.action.malformed"
+    },
+    "opened without ingredient parameters" => {
+      actions: [{ "action" => "c2pa.opened" }],
+      code:    "assertion.action.ingredientMismatch"
+    },
+    "placed without ingredient parameters" => {
+      actions: [CREATED_ACTION, { "action" => "c2pa.placed" }],
+      code:    "assertion.action.ingredientMismatch"
+    },
+    "removed without ingredient parameters" => {
+      actions: [CREATED_ACTION, { "action" => "c2pa.removed" }],
+      code:    "assertion.action.ingredientMismatch"
+    }
+  }.freeze
+
+  ENFORCED_RULES.each do |description, expectation|
+    define_method("test_c2pa_rs_rejects_#{description.tr(' ', '_')}") do
+      assert_includes failure_codes_for(expectation[:actions]), expectation[:code],
+                      "c2pa-rs #{C2PA.sdk_version} no longer reports " \
+                      "#{expectation[:code]} for #{description}"
+    end
+  end
+
+  def test_a_correct_manifest_produces_no_action_failures
+    assert_empty failure_codes_for([CREATED_ACTION]),
+                 "a correct manifest should produce no failures beyond the untrusted test cert"
+  end
+
+  # Supplying the ingredient is not enough on its own: the opened action has to
+  # reference it by hashed URI, which only the native layer can construct. This
+  # is why the edit workflow is unavailable — see #11.
+  def test_opened_is_rejected_even_with_a_parent_ingredient
+    assert_includes failure_codes_for([{ "action" => "c2pa.opened" }],
+                                      ingredients: [PARENT_INGREDIENT]),
+                    "assertion.action.ingredientMismatch"
+  end
+
+  # An empty actions array does not merely fail validation — the resulting file
+  # cannot be read back at all.
+  def test_an_empty_actions_array_produces_an_unreadable_file
+    assert_raises(C2PA::ReadError) { failure_codes_for([]) }
+  end
+
+  # ─── Conformance: rules c2pa-rs does NOT enforce ───────────────────────────
+  #
+  # Recorded so that a change upstream surfaces here. Each of these would be a
+  # reasonable rule for the gem to enforce anyway; what must not happen is for
+  # us to claim the SDK backs us up when it does not.
+
+  # The specification says created must come first, and claim.rs says so in a
+  # comment, but the check compares the actions-assertion index rather than the
+  # action index — so a repeated created inside one assertion is not flagged.
+  def test_created_appearing_second_is_not_flagged_upstream
+    refute_includes failure_codes_for([CREATED_ACTION, CREATED_ACTION]),
+                    "assertion.action.malformed",
+                    "upstream now flags a repeated created; the gem can rely on it"
+  end
+
+  # c2pa-rs does not validate action names, which is why C2PA::Actions has no
+  # external oracle and its test can only check for duplicates and namespacing.
+  def test_unknown_action_names_are_not_flagged_upstream
+    assert_empty failure_codes_for([CREATED_ACTION, { "action" => "acme.nonsense" }]),
+                 "upstream now validates action names; C2PA::Actions could be checked against it"
+  end
+
+  # Introduced in c2pa-rs 0.90. Asserting the 0.90 behaviour here would fail
+  # against 0.78 for the right reason at the wrong time, so these record the
+  # current state and will flip when #16 lands.
+  def test_digital_source_type_is_not_yet_required
+    assert_empty failure_codes_for([CREATED_ACTION]),
+                 "c2pa-rs now requires digitalSourceType on c2pa.created — see #18"
+  end
+
+  def test_translated_languages_are_not_yet_required
+    assert_empty failure_codes_for([CREATED_ACTION, { "action" => "c2pa.translated" }]),
+                 "c2pa-rs now requires language parameters on c2pa.translated — see #19"
+  end
+
   # ─── Character and encoding handling ───────────────────────────────────────
   #
   # Text passes through Ruby JSON generation, the magnus boundary, and CBOR
