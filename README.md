@@ -330,6 +330,13 @@ The Rust extension (`ext/c2pa_native/src/lib.rs`) defines `C2PA::Native` with th
 
 Input validation (missing files, invalid manifests) is handled in Ruby before calling into Rust. Errors from the native layer are caught and re-raised as typed `C2PA::Error` subclasses.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). The short version: every test must be
+shown to fail before it is merged. The suite that shipped with 0.2.1 passed
+while the gem crashed the Ruby process on TIFF input, so a green run is only
+worth what its assertions can catch.
+
 ## License
 
 MIT
