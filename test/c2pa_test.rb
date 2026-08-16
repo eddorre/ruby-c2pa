@@ -127,15 +127,9 @@ class C2PATest < Minitest::Test
 
   # ─── Signing ───────────────────────────────────────────────────────────────
 
-  def test_signs_a_jpeg_and_reads_it_back
-    sign_fixture("tiny.jpg", created_manifest(title: "JPEG smoke test")) do |output|
-      assert File.size?(output), "signed file is empty"
-      result = C2PA.read(file: output)
-      active = result["manifests"].fetch(result["active_manifest"])
-      assert_equal "JPEG smoke test", active["title"]
-    end
-  end
-
+  # Kept alongside the TIFF entry in SIGNABLE_FORMATS. That one asks whether
+  # TIFF works as a format; this one guards a specific crash, and names it.
+  #
   # Regression: signing a TIFF used to abort the Ruby process outright.
   #
   # The culprit is `atree` 0.5.3, which produces an invalid free. macOS
@@ -158,6 +152,64 @@ class C2PATest < Minitest::Test
       result = C2PA.read(file: output)
       active = result["manifests"].fetch(result["active_manifest"])
       assert_equal "TIFF regression", active["title"]
+    end
+  end
+
+  # ─── Format coverage ───────────────────────────────────────────────────────
+  #
+  # Every format the README advertises as signable gets a fixture and a test.
+  # Formats claimed but never exercised are how the PDF row survived: c2pa-rs
+  # cannot write C2PA data to a PDF at all, and nothing caught it.
+  #
+  # Fixtures are synthesised by test/fixtures/generate.sh and committed, so the
+  # suite needs no media tooling to run and carries no third-party content.
+  #
+  # They are not placeholders. C2PA writes manifests into real container
+  # structures — APP11 segments, iTXt chunks, IFD entries, BMFF uuid boxes,
+  # RIFF chunks, ID3 frames — so the fixtures carry real image detail, real
+  # audio samples, real video frames, and real EXIF in the JPEG. 92 KB total.
+
+  SIGNABLE_FORMATS = {
+    "tiny.jpg"  => "JPEG",
+    "tiny.png"  => "PNG",
+    "tiny.webp" => "WebP",
+    "tiny.tiff" => "TIFF",
+    "tiny.avif" => "AVIF",
+    "tiny.jxl"  => "JPEG XL",
+    "tiny.wav"  => "WAV",
+    "tiny.mp3"  => "MP3",
+    "tiny.mp4"  => "MP4",
+    "tiny.mov"  => "MOV (QuickTime)"
+  }.freeze
+
+  SIGNABLE_FORMATS.each do |fixture, label|
+    define_method("test_signs_#{fixture.tr('.', '_')}") do
+      title = "#{label} coverage"
+      read_back(created_manifest(title: title), fixture: fixture) do |active, result|
+        assert_equal title, active["title"], "#{label} did not round-trip its title"
+        assert_includes %w[Valid Trusted], result["validation_state"],
+                        "#{label} signed but does not validate"
+      end
+    end
+  end
+
+  # c2pa-rs has no PDF writer: pdf_io.rs returns None from get_writer and
+  # NotImplemented from save_cai_store. This is true at every version, so the
+  # README must not advertise PDF signing. Asserting the failure keeps the
+  # documentation honest — if upstream ever adds a writer, this test fails and
+  # the claim can be restored deliberately.
+  def test_pdf_signing_is_not_supported
+    assert_certificates_present
+
+    Tempfile.create(["unsigned", ".pdf"]) do |pdf|
+      pdf.write("%PDF-1.4\n%%EOF\n")
+      pdf.flush
+
+      error = assert_raises(C2PA::SigningError) do
+        C2PA.sign(file: pdf.path, output: "#{pdf.path}.signed.pdf",
+                  certificate: CERT, key: KEY, manifest: created_manifest)
+      end
+      assert_match(/unsupported/i, error.message)
     end
   end
 
