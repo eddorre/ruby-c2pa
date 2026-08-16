@@ -52,14 +52,15 @@ jobs:
         with:
           workspaces: ext/c2pa_native
 
-      - name: Fetch c2pa-rs development certificates
+      - name: Generate signing certificates
         # `rake test` depends on this task, so this step is not strictly
-        # required — it is run explicitly so a download failure is attributed
-        # to the certificates rather than surfacing as a test failure.
+        # required — it is run explicitly so a failure here is attributed to
+        # the certificates rather than surfacing as a test failure.
         #
-        # The task aborts on a failed or empty download, and the suite flunks
-        # rather than skips when the certificates are absent, so the signing
-        # tests can never be silently omitted from a green run.
+        # Generated locally through Ruby's OpenSSL binding, so the run needs no
+        # network and no third-party material. The suite flunks rather than
+        # skips when the certificates are absent, so the signing tests can
+        # never be silently omitted from a green run.
         run: |
           bundle exec rake fixtures:certs
 
