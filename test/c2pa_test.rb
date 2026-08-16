@@ -319,6 +319,86 @@ class C2PATest < Minitest::Test
                     "0.78.4 and can resolve atree 0.5.3, which aborts the process on TIFF input"
   end
 
+  # ─── Character and encoding handling ───────────────────────────────────────
+  #
+  # Text passes through Ruby JSON generation, the magnus boundary, and CBOR
+  # encoding inside the C2PA container. Any of those could mangle it.
+  #
+  # Mirrors "should preserve JSON assertion characters without escaping" in
+  # contentauth/c2pa-js Builder.spec.ts.
+
+  # Built from codepoints so this file contains no literal control bytes.
+  def codepoint(number) = number.chr(Encoding::UTF_8)
+
+  def assert_title_survives(title, message)
+    read_back(created_manifest(title: title)) do |active, _|
+      assert_equal title, active["title"], message
+    end
+  end
+
+  def test_quotes_and_backslashes_survive_signing
+    assert_title_survives(%q(He said "hi" \ then \\ left), "quotes or backslashes were mangled")
+  end
+
+  def test_non_ascii_scripts_survive_signing
+    assert_title_survives("Solnedgång 日没 Закат مغيب", "non-ASCII text was mangled")
+  end
+
+  def test_emoji_survive_signing
+    # A ZWJ sequence is several codepoints the reader must not split or reorder.
+    family = [0x1F468, 0x200D, 0x1F469, 0x200D, 0x1F467].map { |c| codepoint(c) }.join
+    assert_title_survives("sunset #{codepoint(0x1F305)} family #{family}", "emoji were mangled")
+  end
+
+  def test_control_characters_survive_signing
+    title = "bell#{codepoint(7)} del#{codepoint(127)} vtab#{codepoint(11)}"
+    assert_title_survives(title, "control characters were mangled")
+  end
+
+  # A NUL is the classic place for a Rust/C boundary to truncate a string.
+  def test_embedded_nul_survives_signing
+    assert_title_survives("before#{codepoint(0)}after", "text was truncated at the NUL")
+  end
+
+  def test_separators_and_bom_survive_signing
+    title = "#{codepoint(0xFEFF)}line#{codepoint(0x2028)}separator"
+    assert_title_survives(title, "BOM or line separator was mangled")
+  end
+
+  def test_long_title_survives_signing
+    assert_title_survives("A" * 4096, "a 4 KB title did not survive")
+  end
+
+  def test_json_like_text_is_not_reinterpreted
+    assert_title_survives('{"not":"json","really":[1,2]}', "JSON-looking text was reinterpreted")
+  end
+
+  def test_special_characters_in_assertion_data_survive_signing
+    description = "quotes \"here\", a \\ backslash,\na newline and\ta tab"
+    manifest = created_manifest.add_assertion(
+      label: "stds.schema-org.CreativeWork",
+      data: { "@context" => "https://schema.org", "description" => description }
+    )
+
+    read_back(manifest) do |active, _|
+      creative_work = active.fetch("assertions")
+                            .find { |a| a["label"] == "stds.schema-org.CreativeWork" }
+      assert_equal description, creative_work.dig("data", "description")
+    end
+  end
+
+  # Invalid UTF-8 is the one input that cannot round-trip. It must still fail as
+  # a C2PA::Error, since the README tells callers that rescuing C2PA::Error is
+  # sufficient. See #28.
+  def test_invalid_utf8_raises_a_c2pa_error
+    title = (+"bad").concat(255.chr).concat("byte")
+    manifest = C2PA::Manifest.new(title: title).add_action(C2PA::Actions::CREATED)
+
+    error = assert_raises(C2PA::InvalidManifestError) { manifest.to_json }
+    assert_kind_of C2PA::Error, error, "callers rescue C2PA::Error and must catch this"
+    assert_match(/\\xFF/i, error.message, "the offending byte should still be identified")
+  end
+
   # ─── Round trip: what actually lands in the signed file ────────────────────
 
   def test_title_survives_signing
