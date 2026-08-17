@@ -194,6 +194,28 @@ C2PA.sign(
 )
 ```
 
+`C2PA.sign` reads the signed file back and confirms it validates before
+returning. If it does not, the output file is deleted and a
+`C2PA::SigningError` is raised naming the failure codes.
+
+This matters because c2pa-rs applies its rules when *reading*, not when
+writing. Signing reports success for manifests that every verifier rejects,
+which is exactly what earlier versions of this gem did — silently, for months.
+The check costs one extra read of the output.
+
+Turn it off with `verify: false` if you want the file kept for inspection:
+
+```ruby
+C2PA.sign(
+  file:        "photo.jpg",
+  output:      "photo_signed.jpg",
+  certificate: "cert.pem",
+  key:         "key.pem",
+  manifest:    manifest,
+  verify:      false
+)
+```
+
 Specify a different signing algorithm with `algorithm:` (default is `"es256"`):
 
 ```ruby
