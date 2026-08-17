@@ -1,3 +1,10 @@
+# Every test here must be able to fail. Before adding one, break the code it
+# covers on purpose and confirm this suite catches it — see CONTRIBUTING.md.
+#
+# That rule exists because the original suite passed while the gem aborted the
+# Ruby process on TIFF input and emitted manifests that verifiers reject. Its
+# assertions compared the code to itself, so none of them could have failed.
+
 require "minitest/autorun"
 require "tmpdir"
 require "tempfile"
