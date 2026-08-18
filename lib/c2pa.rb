@@ -6,6 +6,13 @@ require_relative "c2pa/manifest"
 require "c2pa/c2pa_native"
 
 module C2PA
+  # Validation states that mean a signed asset is good.
+  #
+  # "Trusted" is "Valid" plus a signing certificate that chains to a root in
+  # the active trust list. Accepting only "Valid" would reject exactly the
+  # production files that are most correct.
+  VALID_STATES = %w[Valid Trusted].freeze
+
   # Sign a file with a C2PA manifest.
   #
   # @param file        [String]          path to the input file
@@ -14,7 +21,10 @@ module C2PA
   # @param key         [String]          path to a PEM-encoded private key
   # @param algorithm   [String]          signing algorithm (default: "es256")
   # @param manifest    [C2PA::Manifest]  the manifest to embed
+  # @param verify      [Boolean]         read the signed file back and confirm it
+  #                                      validates (default: true)
   # @return            [String]          the output path
+  # @raise [C2PA::SigningError] if signing fails, or if the signed file does not validate
   #
   # @example
   #   manifest = C2PA::Manifest.new(title: "Sunset over the bay")
@@ -27,7 +37,7 @@ module C2PA
   #     key:         "key.pem",
   #     manifest:    manifest
   #   )
-  def self.sign(file:, output:, certificate:, key:, algorithm: "es256", manifest:)
+  def self.sign(file:, output:, certificate:, key:, algorithm: "es256", manifest:, verify: true)
     manifest_json = manifest.to_json
 
     raise SigningError, "Source file not found: '#{file}'"             unless File.exist?(file)
@@ -35,9 +45,15 @@ module C2PA
     raise SigningError, "Key file not found: '#{key}'"                 unless File.exist?(key)
     raise SigningError, "Output file already exists: '#{output}'"      if File.exist?(output)
 
-    Native.sign_file(file, output, certificate, key, algorithm, manifest_json)
-  rescue RuntimeError => e
-    raise SigningError, e.message
+    begin
+      Native.sign_file(file, output, certificate, key, algorithm, manifest_json)
+    rescue RuntimeError => e
+      raise SigningError, e.message
+    end
+
+    verify_signed_output!(output) if verify
+
+    output
   end
 
   # Read the C2PA manifest embedded in a signed file.
@@ -62,4 +78,48 @@ module C2PA
   def self.sdk_version
     Native.sdk_version
   end
+
+  # Read a freshly signed file back and confirm it actually validates.
+  #
+  # Signing reports success for manifests that verifiers reject. c2pa-rs
+  # applies its rules when reading, not when writing, so without this the gem
+  # hands back a path to a file that fails everywhere else — which is what
+  # released versions did, for years, silently.
+  #
+  # The rejected file is deleted rather than left behind, so a failed sign
+  # cannot leave something shippable on disk.
+  #
+  # @param output [String] path to the signed file
+  # @raise [C2PA::SigningError] if the file does not validate
+  def self.verify_signed_output!(output)
+    result =
+      begin
+        read(file: output)
+      rescue ReadError => e
+        discard(output)
+        raise SigningError, "signed file failed verification: could not read it back: #{e.message}"
+      end
+
+    state = result["validation_state"]
+    return if VALID_STATES.include?(state)
+
+    failures = Array(result.dig("validation_results", "activeManifest", "failure"))
+               .map { |failure| "#{failure["code"]} (#{failure["explanation"]})" }
+    detail = failures.empty? ? "no failure detail reported" : failures.uniq.join(", ")
+
+    discard(output)
+    raise SigningError,
+          "signed file failed verification: validation_state=#{state.inspect}, #{detail}. " \
+          "The output file has been removed. Pass verify: false to keep it for inspection."
+  end
+  private_class_method :verify_signed_output!
+
+  # Remove a file this library created and is about to reject.
+  def self.discard(path)
+    File.delete(path) if File.exist?(path)
+  rescue SystemCallError
+    # Leaving the file behind is better than masking the original failure.
+    nil
+  end
+  private_class_method :discard
 end

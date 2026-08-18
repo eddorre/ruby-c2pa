@@ -326,6 +326,85 @@ class C2PATest < Minitest::Test
                     "0.78.4 and can resolve atree 0.5.3, which aborts the process on TIFF input"
   end
 
+  # ─── Verify after signing ──────────────────────────────────────────────────
+  #
+  # c2pa-rs applies its rules when reading, not when writing, so signing
+  # succeeds for manifests that every verifier rejects. Released versions of
+  # this gem did exactly that, silently, for months.
+  #
+  # The guard is the structural fix: it does not depend on anyone anticipating
+  # which rule will tighten next.
+
+  # A manifest that bypasses Manifest entirely, so the guard is exercised as an
+  # independent backstop rather than a restatement of the builder's rules. The
+  # opened-without-ingredient shape is rejected by every c2pa-rs this gem has
+  # supported, so it stays meaningful across version bumps.
+  def unchecked_invalid_manifest
+    raw = Object.new
+    def raw.to_json
+      JSON.generate("title" => "unchecked",
+                    "assertions" => [{ "label" => "c2pa.actions.v2",
+                                       "data" => { "actions" => [{ "action" => "c2pa.opened" }] } }])
+    end
+    raw
+  end
+
+  def test_signing_an_invalid_manifest_raises_and_removes_the_output
+    assert_certificates_present
+    dir = Dir.mktmpdir
+    output = File.join(dir, "signed.jpg")
+
+    error = assert_raises(C2PA::SigningError) do
+      C2PA.sign(file: File.join(FIXTURES, "tiny.jpg"), output: output,
+                certificate: CERT, key: KEY, manifest: unchecked_invalid_manifest)
+    end
+
+    assert_match(/failed verification/, error.message)
+    assert_match(/assertion\.action\.ingredientMismatch/, error.message,
+                 "the failure codes should be named, not just the state")
+    refute File.exist?(output), "an invalid signed file must not be left on disk"
+  ensure
+    FileUtils.remove_entry(dir) if dir && File.exist?(dir)
+  end
+
+  def test_verify_false_keeps_the_invalid_file_for_inspection
+    assert_certificates_present
+    dir = Dir.mktmpdir
+    output = File.join(dir, "signed.jpg")
+
+    C2PA.sign(file: File.join(FIXTURES, "tiny.jpg"), output: output,
+              certificate: CERT, key: KEY, manifest: unchecked_invalid_manifest,
+              verify: false)
+
+    assert File.exist?(output), "verify: false should leave the file alone"
+    assert_equal "Invalid", C2PA.read(file: output)["validation_state"]
+  ensure
+    FileUtils.remove_entry(dir) if dir && File.exist?(dir)
+  end
+
+  def test_a_valid_manifest_passes_the_guard_and_returns_the_output_path
+    assert_certificates_present
+    dir = Dir.mktmpdir
+    output = File.join(dir, "signed.jpg")
+
+    returned = C2PA.sign(file: File.join(FIXTURES, "tiny.jpg"), output: output,
+                         certificate: CERT, key: KEY, manifest: created_manifest)
+
+    assert_equal output, returned
+    assert File.exist?(output)
+  ensure
+    FileUtils.remove_entry(dir) if dir && File.exist?(dir)
+  end
+
+  # The development certificates are untrusted by design, so every signing test
+  # here runs against state "Valid" rather than "Trusted". A guard accepting
+  # only "Valid" would pass this whole suite and then reject the correctly
+  # trusted files real users produce.
+  def test_trusted_is_accepted_as_well_as_valid
+    assert_includes C2PA::VALID_STATES, "Valid"
+    assert_includes C2PA::VALID_STATES, "Trusted"
+  end
+
   # ─── Conformance: what c2pa-rs actually enforces ───────────────────────────
   #
   # These sign manifests the builder would not produce, bypassing it entirely,
@@ -365,8 +444,10 @@ class C2PATest < Minitest::Test
 
     dir = Dir.mktmpdir
     output = File.join(dir, "signed.jpg")
+    # verify: false — the point of this helper is to produce invalid files and
+    # inspect them, which is exactly what the guard exists to prevent.
     C2PA.sign(file: File.join(FIXTURES, "tiny.jpg"), output: output,
-              certificate: CERT, key: KEY, manifest: unchecked)
+              certificate: CERT, key: KEY, manifest: unchecked, verify: false)
 
     Array(C2PA.read(file: output).dig("validation_results", "activeManifest", "failure"))
       .map { |failure| failure["code"] }
