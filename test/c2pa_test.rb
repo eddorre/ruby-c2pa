@@ -326,6 +326,83 @@ class C2PATest < Minitest::Test
                     "0.78.4 and can resolve atree 0.5.3, which aborts the process on TIFF input"
   end
 
+  # ─── Editing an existing asset ─────────────────────────────────────────────
+  #
+  # A c2pa.opened action must reference its parent ingredient by hashed URI,
+  # and that hash is computed over the ingredient assertion as c2pa-rs
+  # serialises it. Ruby cannot build one — hand-written attempts fail at build
+  # time with "missing field `hash`".
+  #
+  # Declaring the intent hands the problem to the SDK: it derives the parent
+  # ingredient from the source file and wires the action to it. Without this,
+  # the gem could not express an edit at all, and the README's chaining example
+  # produced files that failed validation from the first release.
+
+  def test_edit_intent_produces_a_valid_manifest
+    manifest = C2PA::Manifest.new(title: "Edited photo", intent: :edit)
+                             .add_action(C2PA::Actions::EDITED)
+
+    read_back(manifest) do |_, result|
+      assert_includes C2PA::VALID_STATES, result["validation_state"]
+    end
+  end
+
+  def test_edit_intent_adds_an_opened_action_before_our_own
+    manifest = C2PA::Manifest.new(title: "Edited photo", intent: :edit)
+                             .add_action(C2PA::Actions::EDITED)
+                             .add_action(C2PA::Actions::PUBLISHED)
+
+    read_back(manifest) do |active, _|
+      assert_equal %w[c2pa.opened c2pa.edited c2pa.published],
+                   signed_actions(active).map { |action| action["action"] }
+    end
+  end
+
+  # The reference the gem cannot construct: a URI plus a hash over the
+  # ingredient. Its presence is the whole point of routing through the intent.
+  def test_edit_intent_wires_the_opened_action_to_a_hashed_uri
+    manifest = C2PA::Manifest.new(title: "Edited photo", intent: :edit)
+                             .add_action(C2PA::Actions::EDITED)
+
+    read_back(manifest) do |active, _|
+      opened = signed_actions(active).first
+      reference = opened.dig("parameters", "ingredients", 0)
+      refute_nil reference, "the opened action carries no ingredient reference"
+      refute_nil reference["url"],  "the reference has no URI"
+      refute_nil reference["hash"], "the reference has no hash"
+    end
+  end
+
+  def test_edit_intent_generates_a_parent_ingredient
+    manifest = C2PA::Manifest.new(title: "Edited photo", intent: :edit)
+                             .add_action(C2PA::Actions::EDITED)
+
+    read_back(manifest) do |active, _|
+      relationships = Array(active["ingredients"]).map { |i| i["relationship"] }
+      assert_includes relationships, "parentOf"
+    end
+  end
+
+  def test_opened_cannot_be_added_directly
+    error = assert_raises(C2PA::InvalidManifestError) do
+      C2PA::Manifest.new(title: "Test").add_action(C2PA::Actions::OPENED)
+    end
+    assert_match(/intent: :edit/, error.message, "the error should point at the supported route")
+  end
+
+  def test_unknown_intent_is_rejected
+    error = assert_raises(C2PA::InvalidManifestError) do
+      C2PA::Manifest.new(title: "Test", intent: :sideways)
+    end
+    assert_match(/unknown intent/i, error.message)
+  end
+
+  def test_omitting_the_intent_still_signs_a_creation
+    read_back(created_manifest) do |active, _|
+      assert_equal %w[c2pa.created], signed_actions(active).map { |a| a["action"] }
+    end
+  end
+
   # ─── Verify after signing ──────────────────────────────────────────────────
   #
   # c2pa-rs applies its rules when reading, not when writing, so signing

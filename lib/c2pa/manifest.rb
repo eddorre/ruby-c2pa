@@ -2,9 +2,34 @@ require "json"
 
 module C2PA
   class Manifest
-    # @param title [String] human-readable title for this asset
-    def initialize(title:)
+    # Intents this gem can express.
+    #
+    # :edit — this asset derives from a parent. c2pa-rs generates the parent
+    #         ingredient from the source file and adds a c2pa.opened action
+    #         wired to it by hashed URI.
+    #
+    # Omitting the intent produces a manifest for a newly created asset.
+    #
+    # c2pa-rs also has an :update intent, a restricted edit for non-editorial
+    # changes. It is not offered here because it requires an ingredient with
+    # real content, and add_ingredient records metadata only — signing with it
+    # fails with "ingredient file not found". Tracked separately.
+    INTENTS = %i[edit].freeze
+
+    # @return [Symbol, nil] the builder intent, if any
+    attr_reader :intent
+
+    # @param title  [String] human-readable title for this asset
+    # @param intent [Symbol, nil] :edit or :update; omit for a new creation
+    # @raise [C2PA::InvalidManifestError] if the intent is not recognised
+    def initialize(title:, intent: nil)
+      unless intent.nil? || INTENTS.include?(intent)
+        raise InvalidManifestError,
+              "unknown intent #{intent.inspect}. Valid options: #{INTENTS.map(&:inspect).join(', ')}"
+      end
+
       @title = title
+      @intent = intent
       @actions = []
       @assertions = []
       @ingredients = []
@@ -26,6 +51,14 @@ module C2PA
                    digital_source_type: nil,
                    changed: nil,
                    parameters: nil)
+      if action == Actions::OPENED
+        raise InvalidManifestError,
+              "#{Actions::OPENED} cannot be added directly. The specification requires it to " \
+              "reference a parentOf ingredient by hashed URI, and that hash is computed over " \
+              "the ingredient as c2pa-rs serialises it, so Ruby cannot construct one. Pass " \
+              "intent: :edit to C2PA::Manifest.new instead and the action will be added for you."
+      end
+
       entry = { "action" => action }
       entry["when"]              = when_time                              if when_time
       entry["softwareAgent"]     = software_agent || "ruby-c2pa/#{VERSION}"

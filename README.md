@@ -99,11 +99,31 @@ manifest.add_action(C2PA::Actions::CREATED)
 Actions can be chained:
 
 ```ruby
-manifest = C2PA::Manifest.new(title: "Edited photo")
-  .add_action(C2PA::Actions::OPENED)
+manifest = C2PA::Manifest.new(title: "Sunset over the bay")
+  .add_action(C2PA::Actions::CREATED)
+  .add_action(C2PA::Actions::PUBLISHED)
+```
+
+### Editing an existing asset
+
+When the file you are signing derives from another one, declare the intent
+rather than adding `c2pa.opened` yourself:
+
+```ruby
+manifest = C2PA::Manifest.new(title: "Edited photo", intent: :edit)
   .add_action(C2PA::Actions::EDITED)
   .add_action(C2PA::Actions::PUBLISHED)
 ```
+
+c2pa-rs derives the parent ingredient from the source file and adds a
+`c2pa.opened` action tied to it, so the signed manifest records
+`c2pa.opened`, `c2pa.edited`, `c2pa.published` and a `parentOf` ingredient.
+
+`c2pa.opened` cannot be added by hand. The specification requires it to
+reference its parent ingredient by hashed URI, and that hash is computed over
+the ingredient as c2pa-rs serialises it — so `add_action(C2PA::Actions::OPENED)`
+raises and points here. Earlier releases of this gem documented adding it
+directly; manifests built that way never validated.
 
 Each action accepts optional fields from the C2PA specification:
 
