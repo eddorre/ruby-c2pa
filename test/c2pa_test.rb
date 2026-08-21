@@ -353,8 +353,12 @@ class C2PATest < Minitest::Test
   def test_gemspec_homepage_matches_the_git_remote
     remote = `git config --get remote.origin.url 2>/dev/null`.strip
     if remote.empty?
-      # Not a git checkout, so there is nothing to compare against. The format
-      # check above still applies.
+      # No remote to compare against — a tarball, or a checkout without one.
+      # In CI there is always a remote, so a fallback there would mean this
+      # test had quietly stopped comparing anything while still reporting
+      # green. Fail rather than let that happen unnoticed.
+      flunk "no git remote found, so the homepage was never checked" if ENV["CI"]
+
       assert_match(%r{\Ahttps://}, gemspec.homepage)
       return
     end
