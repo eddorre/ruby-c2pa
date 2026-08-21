@@ -1,5 +1,5 @@
 use std::path::Path;
-use c2pa::{create_signer, Builder, Reader, SigningAlg};
+use c2pa::{create_signer, Builder, BuilderIntent, Reader, SigningAlg};
 use magnus::{function, prelude::*, Error, Ruby};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -22,6 +22,22 @@ fn alg_from_str(alg: &str) -> Result<SigningAlg, String> {
 
 // ─── Core logic ──────────────────────────────────────────────────────────────
 
+// A c2pa.opened action has to reference its parent ingredient by hashed URI,
+// and that hash is computed over the ingredient assertion as c2pa-rs
+// serialises it. Ruby cannot construct one. Declaring the intent instead lets
+// the SDK derive the parent ingredient from the source and wire the action to
+// it, which is the only way the edit workflow can be expressed.
+fn intent_from_str(intent: &str) -> Result<BuilderIntent, String> {
+    match intent.to_lowercase().as_str() {
+        "edit" => Ok(BuilderIntent::Edit),
+        "update" => Ok(BuilderIntent::Update),
+        _ => Err(format!(
+            "Unknown intent: '{}'. Valid options: edit, update",
+            intent
+        )),
+    }
+}
+
 fn do_sign_file(
     source_path: &str,
     dest_path: &str,
@@ -29,6 +45,7 @@ fn do_sign_file(
     key_path: &str,
     alg_str: &str,
     manifest_json: Option<&str>,
+    intent_str: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let cert = std::fs::read(cert_path)
         .map_err(|e| format!("Cannot read certificate '{}': {}", cert_path, e))?;
@@ -49,6 +66,10 @@ fn do_sign_file(
 
     let mut builder = Builder::from_json(json)
         .map_err(|e| format!("Invalid manifest JSON: {}", e))?;
+
+    if let Some(intent) = intent_str {
+        builder.set_intent(intent_from_str(intent)?);
+    }
 
     builder.sign_file(&*signer, source_path, dest_path)
         .map_err(|e| format!("Signing failed: {}", e))?;
@@ -71,10 +92,11 @@ fn sign_file(
     key: String,
     alg: Option<String>,
     manifest_json: Option<String>,
+    intent: Option<String>,
 ) -> Result<String, Error> {
     let alg_str = alg.as_deref().unwrap_or("es256");
 
-    do_sign_file(&source, &dest, &cert, &key, alg_str, manifest_json.as_deref())
+    do_sign_file(&source, &dest, &cert, &key, alg_str, manifest_json.as_deref(), intent.as_deref())
         .map_err(|e| Error::new(Ruby::get().expect("called from Ruby thread").exception_runtime_error(), e.to_string()))?;
 
     Ok(dest)
@@ -96,7 +118,7 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     let c2pa = ruby.define_module("C2PA")?;
     let native = c2pa.define_module("Native")?;
 
-    native.define_singleton_method("sign_file", function!(sign_file, 6))?;
+    native.define_singleton_method("sign_file", function!(sign_file, 7))?;
     native.define_singleton_method("read_file", function!(read_file, 1))?;
     native.define_singleton_method("sdk_version", function!(sdk_version, 0))?;
 

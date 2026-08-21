@@ -46,7 +46,10 @@ module C2PA
     raise SigningError, "Output file already exists: '#{output}'"      if File.exist?(output)
 
     begin
-      Native.sign_file(file, output, certificate, key, algorithm, manifest_json)
+      # to_json is the only thing genuinely required of a manifest, so an
+      # object that provides just that still signs — as a creation.
+      intent = manifest.respond_to?(:intent) ? manifest.intent&.to_s : nil
+      Native.sign_file(file, output, certificate, key, algorithm, manifest_json, intent)
     rescue RuntimeError => e
       raise SigningError, e.message
     end
