@@ -16,13 +16,21 @@ module C2PA
     # fails with "ingredient file not found". Tracked separately.
     INTENTS = %i[edit].freeze
 
+    # c2pa-rs records itself in a namespaced field alongside the generator
+    # name, so the gem does the same when an application supplies its own.
+    GEM_FIELD = "org.rubygems.ruby_c2pa".freeze
+
     # @return [Symbol, nil] the builder intent, if any
     attr_reader :intent
 
     # @param title  [String] human-readable title for this asset
-    # @param intent [Symbol, nil] :edit or :update; omit for a new creation
+    # @param intent [Symbol, nil] :edit; omit for a new creation
+    # @param generator_name    [String, nil] the application doing the signing.
+    #   Defaults to this gem. Supplying it credits your application as the
+    #   claim generator, with the gem recorded alongside.
+    # @param generator_version [String, nil] version of that application
     # @raise [C2PA::InvalidManifestError] if the intent is not recognised
-    def initialize(title:, intent: nil)
+    def initialize(title:, intent: nil, generator_name: nil, generator_version: nil)
       unless intent.nil? || INTENTS.include?(intent)
         raise InvalidManifestError,
               "unknown intent #{intent.inspect}. Valid options: #{INTENTS.map(&:inspect).join(', ')}"
@@ -30,6 +38,8 @@ module C2PA
 
       @title = title
       @intent = intent
+      @generator_name = generator_name
+      @generator_version = generator_version
       @actions = []
       @assertions = []
       @ingredients = []
@@ -106,6 +116,7 @@ module C2PA
 
       manifest = {
         "title" => @title,
+        "claim_generator_info" => [claim_generator_info],
         "assertions" => [
           { "label" => "c2pa.actions.v2", "data" => { "actions" => @actions } },
           *@assertions
@@ -123,6 +134,25 @@ module C2PA
         raise InvalidManifestError,
               "manifest contains text that cannot be encoded as JSON: #{e.message}"
       end
+    end
+
+    private
+
+    # Who signed this. Without it c2pa-rs names itself, so every asset this gem
+    # produced credited "c2pa-rs" and nothing identified the gem or the
+    # application using it.
+    #
+    # c2pa-rs 0.78 permits exactly one entry — supplying two fails with "only 1
+    # claim_generator_info allowed" — so an application name replaces the gem
+    # rather than preceding it, and the gem moves into a namespaced field. That
+    # mirrors how c2pa-rs records itself as org.contentauth.c2pa_rs.
+    def claim_generator_info
+      return { "name" => "ruby-c2pa", "version" => VERSION } if @generator_name.nil?
+
+      info = { "name" => @generator_name }
+      info["version"] = @generator_version if @generator_version
+      info[GEM_FIELD] = VERSION
+      info
     end
   end
 end

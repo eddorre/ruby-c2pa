@@ -256,8 +256,39 @@ result = C2PA.read(file: "photo_signed.jpg")
 
 active = result["manifests"][result["active_manifest"]]
 puts active["title"]
-puts active["claim_generator_info"].first["name"]
+puts active["claim_generator_info"].first["name"]   # => "ruby-c2pa"
 ```
+
+### Naming your application
+
+Signed files credit `ruby-c2pa` by default. To credit your own application
+instead:
+
+```ruby
+manifest = C2PA::Manifest.new(
+  title:             "Sunset over the bay",
+  generator_name:    "Acme Editor",
+  generator_version: "2.0"
+).add_action(C2PA::Actions::CREATED)
+```
+
+The signed manifest then reads:
+
+```json
+{
+  "name": "Acme Editor",
+  "version": "2.0",
+  "org.rubygems.ruby_c2pa": "0.3.0",
+  "org.contentauth.c2pa_rs": "0.78.8"
+}
+```
+
+c2pa-rs permits exactly one claim generator entry, so your application replaces
+the gem as the name rather than preceding it. The gem is recorded in a
+namespaced field alongside it, which is how c2pa-rs records itself.
+
+Releases before 0.3.0 credited `c2pa-rs` and named neither the gem nor the
+calling application.
 
 ### Checking the SDK version
 

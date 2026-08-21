@@ -8,8 +8,13 @@ Gem::Specification.new do |spec|
   spec.summary          = "Ruby bindings for the c2pa content authenticity library"
   spec.description      = "Embed and verify C2PA content provenance and authenticity credentials in images, video, and audio files. Ruby bindings for the official Rust c2pa-rs library."
   spec.license          = "MIT"
-  spec.homepage         = "https://github.com/carlosrodriguez/ruby-c2pa"
-  spec.metadata["source_code_uri"] = spec.homepage
+  spec.homepage         = "https://github.com/eddorre/ruby-c2pa"
+
+  spec.metadata["source_code_uri"]   = spec.homepage
+  spec.metadata["bug_tracker_uri"]   = "#{spec.homepage}/issues"
+  # changelog_uri is added in #21, when CHANGELOG.md exists. Linking to a file
+  # that is not there yet would repeat the defect this change fixes.
+  spec.metadata["documentation_uri"] = "#{spec.homepage}/blob/main/README.md"
 
   spec.files         = Dir["lib/**/*.rb", "ext/**/*.{rs,toml,rb}", "Rakefile", "*.gemspec", "LICENSE", "README.md"]
   spec.require_paths = ["lib"]
