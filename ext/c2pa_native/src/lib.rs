@@ -1,8 +1,26 @@
 use std::path::Path;
-use c2pa::{create_signer, Builder, BuilderIntent, Reader, SigningAlg};
+use std::sync::{Arc, OnceLock};
+use c2pa::{create_signer, Builder, BuilderIntent, Context, Reader, SigningAlg};
 use magnus::{function, prelude::*, Error, Ruby};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+// A Context carries the settings c2pa-rs validates against — trust anchors,
+// what to verify, whether to fetch remote manifests. The older entry points
+// read those from thread-local state, which is why they are deprecated: a
+// threaded Ruby application could see different settings depending on which
+// thread it signed from.
+//
+// One shared Context is built lazily and reused. It is Send + Sync, so an Arc
+// is all that sharing requires, and reusing it avoids re-reading configuration
+// on every call.
+//
+// It currently carries defaults. Exposing settings to Ruby is a separate piece
+// of work; this is the seam that makes it possible.
+fn shared_context() -> &'static Arc<Context> {
+    static CONTEXT: OnceLock<Arc<Context>> = OnceLock::new();
+    CONTEXT.get_or_init(|| Context::new().into_shared())
+}
 
 fn alg_from_str(alg: &str) -> Result<SigningAlg, String> {
     match alg.to_lowercase().as_str() {
@@ -64,7 +82,8 @@ fn do_sign_file(
     let default_json = format!(r#"{{"title": "{}"}}"#, title);
     let json = manifest_json.unwrap_or(&default_json);
 
-    let mut builder = Builder::from_json(json)
+    let mut builder = Builder::from_shared_context(shared_context())
+        .with_definition(json)
         .map_err(|e| format!("Invalid manifest JSON: {}", e))?;
 
     if let Some(intent) = intent_str {
@@ -78,7 +97,8 @@ fn do_sign_file(
 }
 
 fn do_read_file(path: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let reader = Reader::from_file(path)
+    let reader = Reader::from_shared_context(shared_context())
+        .with_file(path)
         .map_err(|e| format!("Failed to read manifest from '{}': {}", path, e))?;
     Ok(reader.json())
 }
