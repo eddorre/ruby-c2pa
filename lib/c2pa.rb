@@ -2,6 +2,7 @@ require "json"
 require_relative "c2pa/version"
 require_relative "c2pa/error"
 require_relative "c2pa/actions"
+require_relative "c2pa/digital_source_types"
 require_relative "c2pa/manifest"
 require "c2pa/c2pa_native"
 

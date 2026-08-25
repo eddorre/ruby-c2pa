@@ -93,14 +93,39 @@ Every signed file requires a `C2PA::Manifest` with at least one action. Actions 
 require "c2pa"
 
 manifest = C2PA::Manifest.new(title: "Sunset over the bay")
-manifest.add_action(C2PA::Actions::CREATED)
+manifest.add_action(
+  C2PA::Actions::CREATED,
+  digital_source_type: C2PA::DigitalSourceTypes::DIGITAL_CAPTURE
+)
 ```
+
+`c2pa.created` must declare how the asset came into being. c2pa-rs rejects a
+manifest without it, and accepts any string you supply — so a wrong value
+validates while asserting something untrue. The gem therefore requires you to
+choose rather than defaulting on your behalf:
+
+| Constant | Use for |
+|----------|---------|
+| `DIGITAL_CAPTURE` | a camera original |
+| `TRAINED_ALGORITHMIC_MEDIA` | generative AI output |
+| `COMPOSITE_WITH_TRAINED_ALGORITHMIC_MEDIA` | edited using generative AI |
+| `SCREEN_CAPTURE` | a screenshot |
+| `HUMAN_EDITS` | human-edited media |
+| `UNSPECIFIED` | the origin is genuinely unknown |
+
+`C2PA::DigitalSourceTypes::ALL` lists them all. Reach for `UNSPECIFIED` when you
+do not know — it is what c2pa-rs uses in its own fixtures, and it is honest in a
+way that guessing is not.
+
+This requirement arrived in c2pa-rs 0.90. Manifests signed by releases before
+0.3.0 omit the field and are rejected by current verifiers.
 
 Actions can be chained:
 
 ```ruby
 manifest = C2PA::Manifest.new(title: "Sunset over the bay")
-  .add_action(C2PA::Actions::CREATED)
+  .add_action(C2PA::Actions::CREATED,
+              digital_source_type: C2PA::DigitalSourceTypes::DIGITAL_CAPTURE)
   .add_action(C2PA::Actions::PUBLISHED)
 ```
 
@@ -203,7 +228,8 @@ The `output` path must not already exist — `C2PA.sign` will raise a `C2PA::Sig
 
 ```ruby
 manifest = C2PA::Manifest.new(title: "Sunset over the bay")
-  .add_action(C2PA::Actions::CREATED)
+  .add_action(C2PA::Actions::CREATED,
+              digital_source_type: C2PA::DigitalSourceTypes::DIGITAL_CAPTURE)
 
 C2PA.sign(
   file:        "photo.jpg",
@@ -269,7 +295,10 @@ manifest = C2PA::Manifest.new(
   title:             "Sunset over the bay",
   generator_name:    "Acme Editor",
   generator_version: "2.0"
-).add_action(C2PA::Actions::CREATED)
+).add_action(
+  C2PA::Actions::CREATED,
+  digital_source_type: C2PA::DigitalSourceTypes::DIGITAL_CAPTURE
+)
 ```
 
 The signed manifest then reads:

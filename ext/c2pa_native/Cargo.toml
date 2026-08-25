@@ -9,7 +9,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 magnus = { version = "0.8", features = [] }
-c2pa = { version = "0.78", features = ["file_io"] }
+c2pa = { version = "0.90", features = ["file_io"] }
 serde_json = "1"
 
 [profile.release]
