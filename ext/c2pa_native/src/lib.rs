@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, RwLock, OnceLock};
 use c2pa::{create_signer, Builder, BuilderIntent, Context, Reader, SigningAlg};
 use magnus::{function, prelude::*, Error, Ruby};
 
@@ -17,9 +17,33 @@ use magnus::{function, prelude::*, Error, Ruby};
 //
 // It currently carries defaults. Exposing settings to Ruby is a separate piece
 // of work; this is the seam that makes it possible.
-fn shared_context() -> &'static Arc<Context> {
-    static CONTEXT: OnceLock<Arc<Context>> = OnceLock::new();
-    CONTEXT.get_or_init(|| Context::new().into_shared())
+fn context_slot() -> &'static RwLock<Arc<Context>> {
+    static CONTEXT: OnceLock<RwLock<Arc<Context>>> = OnceLock::new();
+    CONTEXT.get_or_init(|| RwLock::new(Context::new().into_shared()))
+}
+
+fn shared_context() -> Arc<Context> {
+    context_slot()
+        .read()
+        .expect("context lock poisoned")
+        .clone()
+}
+
+// Replace the shared Context with one built from the supplied settings.
+//
+// c2pa-rs takes settings as JSON, so the Ruby side assembles the document and
+// this only has to validate and install it. Rebuilding rather than mutating
+// keeps the Context immutable once shared: signing already in flight on another
+// thread continues against the settings it started with.
+fn do_configure(settings_json: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let context = Context::new()
+        .with_settings(settings_json)
+        .map_err(|e| format!("Invalid settings: {}", e))?
+        .into_shared();
+
+    *context_slot().write().map_err(|_| "context lock poisoned")? = context;
+
+    Ok(())
 }
 
 fn alg_from_str(alg: &str) -> Result<SigningAlg, String> {
@@ -82,7 +106,7 @@ fn do_sign_file(
     let default_json = format!(r#"{{"title": "{}"}}"#, title);
     let json = manifest_json.unwrap_or(&default_json);
 
-    let mut builder = Builder::from_shared_context(shared_context())
+    let mut builder = Builder::from_shared_context(&shared_context())
         .with_definition(json)
         .map_err(|e| format!("Invalid manifest JSON: {}", e))?;
 
@@ -97,7 +121,7 @@ fn do_sign_file(
 }
 
 fn do_read_file(path: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let reader = Reader::from_shared_context(shared_context())
+    let reader = Reader::from_shared_context(&shared_context())
         .with_file(path)
         .map_err(|e| format!("Failed to read manifest from '{}': {}", path, e))?;
     Ok(reader.json())
@@ -127,6 +151,15 @@ fn read_file(path: String) -> Result<String, Error> {
         .map_err(|e| Error::new(Ruby::get().expect("called from Ruby thread").exception_runtime_error(), e.to_string()))
 }
 
+fn configure(settings_json: String) -> Result<(), Error> {
+    do_configure(&settings_json).map_err(|e| {
+        Error::new(
+            Ruby::get().expect("called from Ruby thread").exception_runtime_error(),
+            e.to_string(),
+        )
+    })
+}
+
 fn sdk_version() -> String {
     c2pa::VERSION.to_string()
 }
@@ -140,6 +173,7 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
 
     native.define_singleton_method("sign_file", function!(sign_file, 7))?;
     native.define_singleton_method("read_file", function!(read_file, 1))?;
+    native.define_singleton_method("configure", function!(configure, 1))?;
     native.define_singleton_method("sdk_version", function!(sdk_version, 0))?;
 
     Ok(())

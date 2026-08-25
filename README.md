@@ -352,6 +352,54 @@ rescue C2PA::Error => e
 end
 ```
 
+## Configuring trust
+
+c2pa-rs checks the signing certificate against a trust list, and reports
+`Trusted` when it chains to a root that list contains. That happens by default,
+so a certificate from a CA in the C2PA trust list needs no configuration.
+
+For a private or enterprise CA, add its root:
+
+```ruby
+C2PA.configure do |config|
+  config.trust_anchors = "ca/root.pem"   # a path, or the PEM text itself
+end
+```
+
+Files signed by a certificate chaining to it then validate as `Trusted` rather
+than carrying `signingCredential.untrusted`.
+
+### Offline and air-gapped environments
+
+Reading an asset may fetch a remote manifest over the network, and revocation
+checking may contact an OCSP responder. Both can be turned off:
+
+```ruby
+C2PA.configure do |config|
+  config.remote_manifest_fetch = false
+  config.ocsp_fetch            = false
+end
+```
+
+### Everything configurable
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `trust_anchors` | none | additional roots to trust, as PEM |
+| `trust_list` | C2PA list | replaces the trust list rather than adding to it |
+| `allowed_certificates` | none | explicitly allowed certificates, as PEM |
+| `verify_trust` | `true` | whether trust is checked at all |
+| `remote_manifest_fetch` | `true` | whether reading may fetch over the network |
+| `ocsp_fetch` | `false` | whether revocation is checked over OCSP |
+
+Settings are global and apply to subsequent calls. Only values you set are
+sent, so anything left alone keeps c2pa-rs's own default. `C2PA.configure` with
+no block resets everything.
+
+Turning `verify_trust` off means nothing is ever reported as untrusted, which
+in a library for establishing provenance is rarely what you want. It exists for
+environments that cannot reach a trust list at all.
+
 ## Supported file formats
 
 Each format below has a fixture and a signing test in the suite: the file is

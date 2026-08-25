@@ -404,6 +404,136 @@ class C2PATest < Minitest::Test
     end
   end
 
+  # ─── Trust configuration ───────────────────────────────────────────────────
+  #
+  # Before this existed the gem could not reach "Trusted" at all — c2pa-rs
+  # checks trust by default, but only against roots it already knows, and there
+  # was no way to add one. Anyone running a private PKI, which is a plausible
+  # case for a content-authenticity library inside an organisation, got
+  # signingCredential.untrusted with no recourse.
+  #
+  # Settings are global, so each test here resets them afterwards.
+
+  # A chain whose root we keep, so it can be added as a trust anchor.
+  def generate_trusted_chain(dir)
+    require_relative "fixtures/generate_certs"
+    key = -> { OpenSSL::PKey::EC.generate("prime256v1") }
+
+    root_key = key.call
+    root = CertificateFixtures.build("Root CA", nil, nil, root_key,
+                                     CertificateFixtures::CA_EXTENSIONS)
+    im_key = key.call
+    im = CertificateFixtures.build(
+      "Intermediate CA", root, root_key, im_key,
+      CertificateFixtures::CA_EXTENSIONS.merge("authorityKeyIdentifier" => ["keyid:always", false])
+    )
+    ee_key = key.call
+    ee = CertificateFixtures.build(
+      "Signer", im, im_key, ee_key,
+      CertificateFixtures::EE_EXTENSIONS.merge("authorityKeyIdentifier" => ["keyid:always", false])
+    )
+
+    chain = File.join(dir, "chain.pub")
+    key_file = File.join(dir, "key.pem")
+    root_file = File.join(dir, "root.pem")
+    File.write(chain, ee.to_pem + im.to_pem)
+    File.write(key_file, ee_key.private_to_pem)
+    File.write(root_file, root.to_pem)
+    [chain, key_file, root_file]
+  end
+
+  def state_signing_with(chain, key, dir, name)
+    output = File.join(dir, "#{name}.jpg")
+    C2PA.sign(file: File.join(FIXTURES, "tiny.jpg"), output: output,
+              certificate: chain, key: key, manifest: created_manifest)
+    C2PA.read(file: output)["validation_state"]
+  end
+
+  def test_a_configured_trust_anchor_yields_a_trusted_result
+    assert_certificates_present
+    dir = Dir.mktmpdir
+    chain, key, root = generate_trusted_chain(dir)
+
+    assert_equal "Valid", state_signing_with(chain, key, dir, "before"),
+                 "an unknown CA should not be trusted"
+
+    C2PA.configure { |config| config.trust_anchors = root }
+
+    assert_equal "Trusted", state_signing_with(chain, key, dir, "after"),
+                 "adding the root as a trust anchor should produce Trusted"
+  ensure
+    C2PA.configure
+    FileUtils.remove_entry(dir) if dir && File.exist?(dir)
+  end
+
+  def test_configuration_can_be_reset
+    assert_certificates_present
+    dir = Dir.mktmpdir
+    chain, key, root = generate_trusted_chain(dir)
+
+    C2PA.configure { |config| config.trust_anchors = root }
+    assert_equal "Trusted", state_signing_with(chain, key, dir, "configured")
+
+    C2PA.configure
+    assert_equal "Valid", state_signing_with(chain, key, dir, "reset"),
+                 "resetting should restore the default trust list"
+  ensure
+    C2PA.configure
+    FileUtils.remove_entry(dir) if dir && File.exist?(dir)
+  end
+
+  def test_trust_anchors_accept_pem_text_as_well_as_a_path
+    assert_certificates_present
+    dir = Dir.mktmpdir
+    chain, key, root = generate_trusted_chain(dir)
+
+    C2PA.configure { |config| config.trust_anchors = File.read(root) }
+
+    assert_equal "Trusted", state_signing_with(chain, key, dir, "inline")
+  ensure
+    C2PA.configure
+    FileUtils.remove_entry(dir) if dir && File.exist?(dir)
+  end
+
+  def test_trust_verification_can_be_disabled
+    assert_certificates_present
+    C2PA.configure { |config| config.verify_trust = false }
+
+    read_back(created_manifest) do |_, result|
+      codes = Array(result.dig("validation_results", "activeManifest", "failure"))
+              .map { |failure| failure["code"] }
+      refute_includes codes, "signingCredential.untrusted",
+                      "with trust checking off, nothing should be reported as untrusted"
+    end
+  ensure
+    C2PA.configure
+  end
+
+  def test_an_unusable_trust_anchor_raises
+    error = assert_raises(C2PA::InvalidSettingsError) do
+      C2PA.configure { |config| config.trust_anchors = "/nonexistent/ca.pem" }
+    end
+    assert_match(/PEM text or a readable file/, error.message)
+  ensure
+    C2PA.configure
+  end
+
+  # Only what the caller sets is sent, so anything untouched keeps c2pa-rs's
+  # default rather than being pinned to ours.
+  def test_an_empty_configuration_sends_no_settings
+    assert_equal "{}", C2PA::Config.new.to_json
+  end
+
+  def test_network_fetches_can_be_disabled
+    config = C2PA::Config.new
+    config.remote_manifest_fetch = false
+    config.ocsp_fetch = false
+
+    settings = JSON.parse(config.to_json)
+    assert_equal false, settings.dig("verify", "remote_manifest_fetch")
+    assert_equal false, settings.dig("verify", "ocsp_fetch")
+  end
+
   # ─── Concurrency ───────────────────────────────────────────────────────────
   #
   # The native layer shares one c2pa-rs Context across calls. The entry points

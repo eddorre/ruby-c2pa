@@ -3,6 +3,7 @@ require_relative "c2pa/version"
 require_relative "c2pa/error"
 require_relative "c2pa/actions"
 require_relative "c2pa/digital_source_types"
+require_relative "c2pa/config"
 require_relative "c2pa/manifest"
 require "c2pa/c2pa_native"
 
@@ -13,6 +14,39 @@ module C2PA
   # the active trust list. Accepting only "Valid" would reject exactly the
   # production files that are most correct.
   VALID_STATES = %w[Valid Trusted].freeze
+
+  # Configure how c2pa-rs validates.
+  #
+  # Settings are global and take effect for subsequent calls. Signing already
+  # in flight on another thread continues against the settings it started
+  # with, since the underlying context is replaced rather than mutated.
+  #
+  # @yieldparam config [C2PA::Config]
+  # @return [C2PA::Config] the configuration that was applied
+  # @raise [C2PA::InvalidSettingsError] if the settings are not usable
+  #
+  # @example Trusting a private CA
+  #   C2PA.configure do |config|
+  #     config.trust_anchors = "ca/root.pem"
+  #   end
+  #
+  # @example An offline environment
+  #   C2PA.configure do |config|
+  #     config.remote_manifest_fetch = false
+  #     config.ocsp_fetch = false
+  #   end
+  def self.configure
+    config = Config.new
+    yield config if block_given?
+
+    begin
+      Native.configure(config.to_json)
+    rescue RuntimeError => e
+      raise InvalidSettingsError, e.message
+    end
+
+    config
+  end
 
   # Sign a file with a C2PA manifest.
   #
