@@ -387,6 +387,58 @@ class C2PATest < Minitest::Test
     end
   end
 
+  # Trust verification must be on. c2pa-rs checks it by default, but the native
+  # layer now supplies a Context, and a Context can turn it off — silently, in a
+  # library whose purpose is establishing trust.
+  #
+  # The development certificates chain to a root nobody trusts, so a run with
+  # trust checking enabled reports signingCredential.untrusted. If that status
+  # disappears, trust is no longer being checked at all.
+  def test_trust_verification_is_enabled
+    read_back(created_manifest) do |_, result|
+      codes = Array(result.dig("validation_results", "activeManifest", "failure"))
+              .map { |failure| failure["code"] }
+      assert_includes codes, "signingCredential.untrusted",
+                      "the development certificates are untrusted, so this status must " \
+                      "appear — its absence means trust checking is disabled"
+    end
+  end
+
+  # ─── Concurrency ───────────────────────────────────────────────────────────
+  #
+  # The native layer shares one c2pa-rs Context across calls. The entry points
+  # it replaced read their settings from thread-local state, which is the
+  # reason upstream deprecated them: a threaded application could see different
+  # settings depending on which thread it signed from.
+  #
+  # Signing from several threads at once must produce correct, unmixed results.
+
+  def test_signing_concurrently_produces_correct_results
+    assert_certificates_present
+    dir = Dir.mktmpdir
+
+    results = 8.times.map do |i|
+      Thread.new do
+        output = File.join(dir, "concurrent-#{i}.jpg")
+        manifest = C2PA::Manifest.new(title: "thread #{i}")
+                                 .add_action(C2PA::Actions::CREATED,
+                                             digital_source_type: DIGITAL_CAPTURE)
+        C2PA.sign(file: File.join(FIXTURES, "tiny.jpg"), output: output,
+                  certificate: CERT, key: KEY, manifest: manifest)
+        result = C2PA.read(file: output)
+        [result["validation_state"],
+         result["manifests"].fetch(result["active_manifest"])["title"]]
+      end
+    end.map(&:value)
+
+    states, titles = results.transpose
+    states.each { |state| assert_includes C2PA::VALID_STATES, state }
+    assert_equal (0...8).map { |i| "thread #{i}" }.sort, titles.sort,
+                 "titles were mixed between threads"
+  ensure
+    FileUtils.remove_entry(dir) if dir && File.exist?(dir)
+  end
+
   # ─── Packaging ─────────────────────────────────────────────────────────────
   #
   # 0.2.1 shipped 1.3 MB of Rust build-script output, because "ext/**/*.rs"

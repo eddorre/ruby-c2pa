@@ -67,6 +67,21 @@ jobs:
       - name: Compile the native extension
         run: bundle exec rake compile
 
+      - name: Check for deprecated c2pa-rs API use
+        # The older Builder and Reader entry points read settings from
+        # thread-local state and are deprecated; 0.88 already removed one batch
+        # of long-deprecated APIs. Catching a reintroduction here is cheaper
+        # than discovering it when a future bump drops them.
+        run: |
+          cd ext/c2pa_native
+          count=$(cargo build --message-format=short 2>&1 | grep -c "use of deprecated" || true)
+          if [ "$count" -ne 0 ]; then
+            echo "::error::$count deprecated c2pa-rs API use(s); see CONTRIBUTING.md"
+            cargo build --message-format=short 2>&1 | grep "use of deprecated" || true
+            exit 1
+          fi
+          echo "no deprecated API use"
+
       - name: Report the c2pa-rs version under test
         # Block scalar, and no Ruby string interpolation: in a plain YAML
         # scalar " #" opens a comment, which silently truncates the command.
