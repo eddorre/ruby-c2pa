@@ -64,22 +64,44 @@ The native Rust library is compiled automatically during installation. This take
 
 ## Preparing your certificate and key
 
-C2PA signing requires an X.509 certificate chain and private key in PEM format. The certificate must chain to a CA that is trusted by the C2PA ecosystem — **self-signed certificates are rejected by c2pa-rs**.
+C2PA signing requires an X.509 certificate chain and private key in PEM format.
+The certificate file contains the end-entity certificate first, then any
+intermediates, and must **not** include the root.
+
+c2pa-rs enforces a certificate profile. An end-entity certificate is rejected
+unless it carries all of:
+
+- Basic Constraints `CA:FALSE`, critical
+- Key Usage with `digitalSignature` or `nonRepudiation`, critical
+- an Extended Key Usage that is present and not `any`, critical
+- a Subject Key Identifier
+- an **Authority Key Identifier**
+
+The last one is easy to miss — `openssl x509 -req` omits it by default, and the
+certificate is then rejected with nothing more specific than
+`the certificate is invalid`.
+
+### Whose CA?
+
+A certificate from a CA in the C2PA trust list validates as `Trusted` with no
+configuration.
+
+A certificate from your own CA validates as `Valid` and carries
+`signingCredential.untrusted` — which does **not** make the manifest invalid.
+To have it treated as trusted, add your root as a trust anchor; see
+[Configuring trust](#configuring-trust).
 
 ### Development and testing
 
-The c2pa-rs project publishes test certificates that work for local development:
+The test suite generates its own certificates for every supported algorithm:
 
 ```bash
-curl -sL -o test_cert.pem https://raw.githubusercontent.com/contentauth/c2pa-rs/main/sdk/tests/fixtures/certs/es256.pub
-curl -sL -o test_key.pem  https://raw.githubusercontent.com/contentauth/c2pa-rs/main/sdk/tests/fixtures/certs/es256.pem
+bundle exec rake fixtures:certs
 ```
 
-Files signed with these test certificates will include a `signingCredential.untrusted` validation warning since the test CA is not in the public trust list, but are otherwise valid for development purposes.
-
-### Production
-
-Obtain a certificate from a CA trusted by the C2PA ecosystem. The certificate file must contain the full chain (end-entity certificate first, then any intermediates), but must **not** include the root CA.
+They land in `test/fixtures/certs/` and are not committed. See
+[`test/fixtures/generate_certs.rb`](test/fixtures/generate_certs.rb) for a
+worked example of building a chain c2pa-rs accepts.
 
 The supported signing algorithms are: `es256`, `es384`, `es512`, `ps256`, `ps384`, `ps512`, `ed25519`.
 
