@@ -326,6 +326,102 @@ class C2PATest < Minitest::Test
                     "0.78.4 and can resolve atree 0.5.3, which aborts the process on TIFF input"
   end
 
+  # ─── Gem metadata ──────────────────────────────────────────────────────────
+  #
+  # Released versions pointed homepage and source_code_uri at
+  # github.com/carlosrodriguez/ruby-c2pa, which does not exist, so anyone
+  # following the link from RubyGems got a 404.
+  #
+  # Whether a URL resolves cannot be checked without a network, and a test that
+  # reaches the internet is a test that fails on a train. What is checked here
+  # is internal consistency: the links agree with each other, so updating the
+  # homepage cannot leave the others pointing somewhere else.
+
+  def gemspec
+    @gemspec ||= Gem::Specification.load(File.expand_path("../ruby-c2pa.gemspec", __dir__))
+  end
+
+  def test_gemspec_declares_a_homepage
+    refute_nil gemspec.homepage
+    assert_match(%r{\Ahttps://}, gemspec.homepage)
+  end
+
+  # The gemspec interpolates every metadata link from spec.homepage, so
+  # asserting they agree with it would be a tautology — it cannot fail. The
+  # real question is whether the homepage names the repository this code
+  # actually lives in, and git can answer that.
+  def test_gemspec_homepage_matches_the_git_remote
+    remote = `git config --get remote.origin.url 2>/dev/null`.strip
+    if remote.empty?
+      # No remote to compare against — a tarball, or a checkout without one.
+      # In CI there is always a remote, so a fallback there would mean this
+      # test had quietly stopped comparing anything while still reporting
+      # green. Fail rather than let that happen unnoticed.
+      flunk "no git remote found, so the homepage was never checked" if ENV["CI"]
+
+      assert_match(%r{\Ahttps://}, gemspec.homepage)
+      return
+    end
+
+    expected = remote.sub(%r{\A(git@|https://)}, "")
+                     .sub(":", "/")
+                     .sub(%r{\.git\z}, "")
+    assert_equal "https://#{expected}", gemspec.homepage,
+                 "the gemspec points somewhere other than this repository"
+  end
+
+  def test_gemspec_links_do_not_reference_a_missing_changelog
+    # CHANGELOG.md does not exist yet; linking to it would repeat the defect.
+    refute gemspec.metadata.key?("changelog_uri"),
+           "changelog_uri should only be declared once CHANGELOG.md exists"
+  end
+
+  # ─── Claim generator ───────────────────────────────────────────────────────
+  #
+  # Without a claim_generator_info of our own, c2pa-rs names itself, so every
+  # asset this gem signed credited "c2pa-rs" and nothing identified the gem or
+  # the application using it. The README even told callers to read that field
+  # expecting their own application name.
+
+  def test_signed_files_credit_the_gem_by_default
+    read_back(created_manifest) do |active, _|
+      info = Array(active["claim_generator_info"]).first
+      assert_equal "ruby-c2pa", info["name"]
+      assert_equal C2PA::VERSION, info["version"]
+    end
+  end
+
+  def test_an_application_can_name_itself_as_the_generator
+    manifest = C2PA::Manifest.new(title: "Test", generator_name: "Acme Editor",
+                                  generator_version: "2.0")
+                             .add_action(C2PA::Actions::CREATED)
+
+    read_back(manifest) do |active, _|
+      info = Array(active["claim_generator_info"]).first
+      assert_equal "Acme Editor", info["name"]
+      assert_equal "2.0", info["version"]
+    end
+  end
+
+  # c2pa-rs 0.78 permits exactly one entry, so the gem cannot sit alongside an
+  # application as a second entry. It goes into a namespaced field instead,
+  # which is how c2pa-rs records itself.
+  def test_the_gem_is_still_recorded_when_an_application_names_itself
+    manifest = C2PA::Manifest.new(title: "Test", generator_name: "Acme Editor")
+                             .add_action(C2PA::Actions::CREATED)
+
+    read_back(manifest) do |active, _|
+      info = Array(active["claim_generator_info"]).first
+      assert_equal C2PA::VERSION, info[C2PA::Manifest::GEM_FIELD]
+    end
+  end
+
+  def test_only_one_claim_generator_entry_is_emitted
+    json = JSON.parse(created_manifest.to_json)
+    assert_equal 1, json["claim_generator_info"].length,
+                 "c2pa-rs rejects more than one entry: only 1 claim_generator_info allowed"
+  end
+
   # ─── Editing an existing asset ─────────────────────────────────────────────
   #
   # A c2pa.opened action must reference its parent ingredient by hashed URI,
