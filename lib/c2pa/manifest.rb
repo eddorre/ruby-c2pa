@@ -69,6 +69,30 @@ module C2PA
               "intent: :edit to C2PA::Manifest.new instead and the action will be added for you."
       end
 
+      # Required as of c2pa-rs 0.90. Earlier versions accepted its absence, so
+      # manifests signed by releases before 0.3.0 are rejected by current
+      # verifiers. No default is supplied: c2pa-rs accepts any string here, so
+      # a guess would validate while asserting something untrue about where the
+      # asset came from. Use DigitalSourceTypes::UNSPECIFIED to decline.
+      if action == Actions::CREATED && to_s_or_nil(digital_source_type).nil?
+        raise InvalidManifestError,
+              "#{Actions::CREATED} requires a digital_source_type. Choose the value that " \
+              "describes how the asset was produced — for example " \
+              "C2PA::DigitalSourceTypes::DIGITAL_CAPTURE for a camera original, or " \
+              "TRAINED_ALGORITHMIC_MEDIA for generative AI. If the origin is genuinely " \
+              "unknown, use C2PA::DigitalSourceTypes::UNSPECIFIED rather than guessing."
+      end
+
+      # Also new in c2pa-rs 0.90.
+      if action == Actions::TRANSLATED
+        missing = %w[sourceLanguage targetLanguage].reject { |key| param_present?(parameters, key) }
+        unless missing.empty?
+          raise InvalidManifestError,
+                "#{Actions::TRANSLATED} requires #{missing.join(' and ')} in parameters, " \
+                "as RFC 5646 language codes"
+        end
+      end
+
       entry = { "action" => action }
       entry["when"]              = when_time                              if when_time
       entry["softwareAgent"]     = software_agent || "ruby-c2pa/#{VERSION}"
@@ -137,6 +161,20 @@ module C2PA
     end
 
     private
+
+    # Parameters may be keyed with strings or symbols depending on the caller.
+    def param_present?(parameters, key)
+      return false unless parameters.is_a?(Hash)
+
+      !to_s_or_nil(parameters[key] || parameters[key.to_sym]).nil?
+    end
+
+    def to_s_or_nil(value)
+      return nil if value.nil?
+
+      string = value.to_s
+      string.empty? ? nil : string
+    end
 
     # Who signed this. Without it c2pa-rs names itself, so every asset this gem
     # produced credited "c2pa-rs" and nothing identified the gem or the

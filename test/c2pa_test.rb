@@ -44,8 +44,11 @@ class C2PATest < Minitest::Test
     FileUtils.remove_entry(dir) if dir && File.exist?(dir)
   end
 
+  DIGITAL_CAPTURE = C2PA::DigitalSourceTypes::DIGITAL_CAPTURE
+
   def created_manifest(title: "Test")
-    C2PA::Manifest.new(title: title).add_action(C2PA::Actions::CREATED)
+    C2PA::Manifest.new(title: title)
+                  .add_action(C2PA::Actions::CREATED, digital_source_type: DIGITAL_CAPTURE)
   end
 
   # Sign a fixture and yield the active manifest exactly as c2pa-rs reads it
@@ -78,7 +81,7 @@ class C2PATest < Minitest::Test
   end
 
   def test_sign_raises_on_missing_file
-    manifest = C2PA::Manifest.new(title: "Test").add_action(C2PA::Actions::CREATED)
+    manifest = C2PA::Manifest.new(title: "Test").add_action(C2PA::Actions::CREATED, digital_source_type: DIGITAL_CAPTURE)
 
     assert_raises(C2PA::SigningError) do
       C2PA.sign(
@@ -394,7 +397,7 @@ class C2PATest < Minitest::Test
   def test_an_application_can_name_itself_as_the_generator
     manifest = C2PA::Manifest.new(title: "Test", generator_name: "Acme Editor",
                                   generator_version: "2.0")
-                             .add_action(C2PA::Actions::CREATED)
+                             .add_action(C2PA::Actions::CREATED, digital_source_type: DIGITAL_CAPTURE)
 
     read_back(manifest) do |active, _|
       info = Array(active["claim_generator_info"]).first
@@ -408,7 +411,7 @@ class C2PATest < Minitest::Test
   # which is how c2pa-rs records itself.
   def test_the_gem_is_still_recorded_when_an_application_names_itself
     manifest = C2PA::Manifest.new(title: "Test", generator_name: "Acme Editor")
-                             .add_action(C2PA::Actions::CREATED)
+                             .add_action(C2PA::Actions::CREATED, digital_source_type: DIGITAL_CAPTURE)
 
     read_back(manifest) do |active, _|
       info = Array(active["claim_generator_info"]).first
@@ -596,7 +599,13 @@ class C2PATest < Minitest::Test
   # at the wrong time. They arrive with the upgrade, in #18 and #19.
 
   ACTIONS_LABEL = "c2pa.actions.v2".freeze
-  CREATED_ACTION = { "action" => "c2pa.created" }.freeze
+  # A c2pa.created without a digitalSourceType is malformed on 0.90, so using a
+  # bare one here would report assertion.action.malformed for every case and
+  # hide the rule actually being tested.
+  CREATED_ACTION = {
+    "action" => "c2pa.created",
+    "digitalSourceType" => C2PA::DigitalSourceTypes::DIGITAL_CAPTURE
+  }.freeze
   PARENT_INGREDIENT = {
     "title" => "original.jpg", "format" => "image/jpeg",
     "instance_id" => "xmp:iid:original", "relationship" => "parentOf"
@@ -703,17 +712,55 @@ class C2PATest < Minitest::Test
                  "upstream now validates action names; C2PA::Actions could be checked against it"
   end
 
-  # Introduced in c2pa-rs 0.90. Asserting the 0.90 behaviour here would fail
-  # against 0.78 for the right reason at the wrong time, so these record the
-  # current state and will flip when #16 lands.
-  def test_digital_source_type_is_not_yet_required
-    assert_empty failure_codes_for([CREATED_ACTION]),
-                 "c2pa-rs now requires digitalSourceType on c2pa.created — see #18"
+  # These two arrived with c2pa-rs 0.90. Until the bump they were recorded as
+  # not-yet-enforced; the canaries fired on upgrade, which is what they were
+  # for. They are now asserted as real rules.
+  def test_created_without_a_digital_source_type_is_rejected
+    assert_includes failure_codes_for([{ "action" => "c2pa.created" }]),
+                    "assertion.action.malformed"
   end
 
-  def test_translated_languages_are_not_yet_required
-    assert_empty failure_codes_for([CREATED_ACTION, { "action" => "c2pa.translated" }]),
-                 "c2pa-rs now requires language parameters on c2pa.translated — see #19"
+  def test_translated_without_languages_is_rejected
+    assert_includes failure_codes_for([CREATED_ACTION, { "action" => "c2pa.translated" }]),
+                    "assertion.action.malformed"
+  end
+
+  # The other half: what the builder demands must actually satisfy c2pa-rs.
+  def test_translated_with_languages_signs_clean
+    manifest = created_manifest.add_action(
+      C2PA::Actions::TRANSLATED,
+      parameters: { "sourceLanguage" => "en-US", "targetLanguage" => "fr-FR" }
+    )
+
+    read_back(manifest) do |_, result|
+      assert_includes C2PA::VALID_STATES, result["validation_state"]
+    end
+  end
+
+  # Builder-side enforcement, so the failure arrives at the call site rather
+  # than after signing.
+  def test_builder_requires_a_digital_source_type_for_created
+    error = assert_raises(C2PA::InvalidManifestError) do
+      C2PA::Manifest.new(title: "Test").add_action(C2PA::Actions::CREATED)
+    end
+    assert_match(/digital_source_type/, error.message)
+    assert_match(/UNSPECIFIED/, error.message, "the error should offer an honest opt-out")
+  end
+
+  def test_builder_requires_languages_for_translated
+    assert_raises(C2PA::InvalidManifestError) do
+      created_manifest.add_action(C2PA::Actions::TRANSLATED)
+    end
+  end
+
+  def test_unspecified_source_type_is_accepted
+    manifest = C2PA::Manifest.new(title: "Test")
+                             .add_action(C2PA::Actions::CREATED,
+                                         digital_source_type: C2PA::DigitalSourceTypes::UNSPECIFIED)
+
+    read_back(manifest) do |_, result|
+      assert_includes C2PA::VALID_STATES, result["validation_state"]
+    end
   end
 
   # ─── Character and encoding handling ───────────────────────────────────────
@@ -789,7 +836,7 @@ class C2PATest < Minitest::Test
   # sufficient. See #28.
   def test_invalid_utf8_raises_a_c2pa_error
     title = (+"bad").concat(255.chr).concat("byte")
-    manifest = C2PA::Manifest.new(title: title).add_action(C2PA::Actions::CREATED)
+    manifest = C2PA::Manifest.new(title: title).add_action(C2PA::Actions::CREATED, digital_source_type: DIGITAL_CAPTURE)
 
     error = assert_raises(C2PA::InvalidManifestError) { manifest.to_json }
     assert_kind_of C2PA::Error, error, "callers rescue C2PA::Error and must catch this"
@@ -823,7 +870,7 @@ class C2PATest < Minitest::Test
 
   def test_custom_software_agent_survives_signing
     manifest = C2PA::Manifest.new(title: "Test")
-                             .add_action(C2PA::Actions::CREATED,
+                             .add_action(C2PA::Actions::CREATED, digital_source_type: DIGITAL_CAPTURE,
                                          software_agent: "Acme Editor/2.0")
 
     read_back(manifest) do |active, _|
@@ -833,7 +880,7 @@ class C2PATest < Minitest::Test
 
   def test_when_time_survives_signing
     manifest = C2PA::Manifest.new(title: "Test")
-                             .add_action(C2PA::Actions::CREATED,
+                             .add_action(C2PA::Actions::CREATED, digital_source_type: DIGITAL_CAPTURE,
                                          when_time: "2026-03-17T10:00:00Z")
 
     read_back(manifest) do |active, _|
@@ -845,7 +892,7 @@ class C2PATest < Minitest::Test
   def test_digital_source_type_survives_signing
     source_type = "http://cv.iptc.org/newscodes/digitalsourcetype/digitalCapture"
     manifest = C2PA::Manifest.new(title: "Test")
-                             .add_action(C2PA::Actions::CREATED,
+                             .add_action(C2PA::Actions::CREATED, digital_source_type: DIGITAL_CAPTURE,
                                          digital_source_type: source_type)
 
     read_back(manifest) do |active, _|
