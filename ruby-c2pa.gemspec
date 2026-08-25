@@ -16,7 +16,27 @@ Gem::Specification.new do |spec|
   # that is not there yet would repeat the defect this change fixes.
   spec.metadata["documentation_uri"] = "#{spec.homepage}/blob/main/README.md"
 
-  spec.files         = Dir["lib/**/*.rb", "ext/**/*.{rs,toml,rb}", "Rakefile", "*.gemspec", "LICENSE", "README.md"]
+  # Listed explicitly rather than globbed. "ext/**/*.rs" swept in whatever
+  # happened to be under ext/c2pa_native/target, so the package contents
+  # depended on what had been compiled on the machine that ran `gem build` —
+  # 1.3 MB of dependency build-script output shipped in 0.2.1.
+  #
+  # Cargo.lock is included deliberately. The extension is compiled at install
+  # time, so without it every installer resolves the dependency tree afresh.
+  # That is how 0.2.1 shipped against a broken atree and aborted the Ruby
+  # process on TIFF input.
+  spec.files = [
+    "LICENSE",
+    "README.md",
+    "CONTRIBUTING.md",
+    "Rakefile",
+    "ruby-c2pa.gemspec",
+    "ext/c2pa_native/Cargo.toml",
+    "ext/c2pa_native/Cargo.lock",
+    "ext/c2pa_native/extconf.rb",
+    *Dir["ext/c2pa_native/src/**/*.rs"],
+    *Dir["lib/**/*.rb"]
+  ].sort
   spec.require_paths = ["lib"]
   spec.extensions    = ["ext/c2pa_native/extconf.rb"]
 

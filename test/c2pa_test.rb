@@ -379,6 +379,41 @@ class C2PATest < Minitest::Test
            "changelog_uri should only be declared once CHANGELOG.md exists"
   end
 
+  # ─── Packaging ─────────────────────────────────────────────────────────────
+  #
+  # 0.2.1 shipped 1.3 MB of Rust build-script output, because "ext/**/*.rs"
+  # matched everything under ext/c2pa_native/target. The package contents
+  # therefore depended on what had been compiled on the machine that ran
+  # gem build.
+
+  def test_the_gem_ships_no_build_artifacts
+    artifacts = gemspec.files.select { |f| f.include?("/target/") }
+    assert_empty artifacts, "build output must not be packaged"
+  end
+
+  def test_the_gem_ships_its_library_and_extension_sources
+    %w[
+      lib/c2pa.rb lib/c2pa/manifest.rb lib/c2pa/actions.rb
+      lib/c2pa/digital_source_types.rb lib/c2pa/error.rb lib/c2pa/version.rb
+      ext/c2pa_native/src/lib.rs ext/c2pa_native/Cargo.toml
+      ext/c2pa_native/extconf.rb
+    ].each do |path|
+      assert_includes gemspec.files, path, "#{path} is missing from the package"
+    end
+  end
+
+  # The extension is compiled at install time, so without a lockfile every
+  # installer resolves the dependency tree afresh. That is how 0.2.1 shipped
+  # against a broken atree and aborted the Ruby process on TIFF input.
+  def test_the_gem_ships_a_lockfile_so_installs_are_reproducible
+    assert_includes gemspec.files, "ext/c2pa_native/Cargo.lock"
+  end
+
+  def test_packaged_files_all_exist
+    missing = gemspec.files.reject { |f| File.exist?(File.expand_path("../#{f}", __dir__)) }
+    assert_empty missing, "packaged files that are not on disk"
+  end
+
   # ─── Claim generator ───────────────────────────────────────────────────────
   #
   # Without a claim_generator_info of our own, c2pa-rs names itself, so every
