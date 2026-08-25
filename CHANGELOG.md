@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.0] — unreleased
+## [0.3.0] — 2026-08-25
 
 Runs on c2pa-rs 0.90, and fixes every defect found while building a test suite
 that verifies against c2pa-rs rather than against itself.
