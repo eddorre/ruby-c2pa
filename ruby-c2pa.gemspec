@@ -12,8 +12,7 @@ Gem::Specification.new do |spec|
 
   spec.metadata["source_code_uri"]   = spec.homepage
   spec.metadata["bug_tracker_uri"]   = "#{spec.homepage}/issues"
-  # changelog_uri is added in #21, when CHANGELOG.md exists. Linking to a file
-  # that is not there yet would repeat the defect this change fixes.
+  spec.metadata["changelog_uri"]     = "#{spec.homepage}/blob/main/CHANGELOG.md"
   spec.metadata["documentation_uri"] = "#{spec.homepage}/blob/main/README.md"
 
   # Listed explicitly rather than globbed. "ext/**/*.rs" swept in whatever
@@ -28,6 +27,7 @@ Gem::Specification.new do |spec|
   spec.files = [
     "LICENSE",
     "README.md",
+    "CHANGELOG.md",
     "CONTRIBUTING.md",
     "Rakefile",
     "ruby-c2pa.gemspec",

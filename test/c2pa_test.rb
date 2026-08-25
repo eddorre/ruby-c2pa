@@ -373,10 +373,18 @@ class C2PATest < Minitest::Test
                  "the gemspec points somewhere other than this repository"
   end
 
-  def test_gemspec_links_do_not_reference_a_missing_changelog
-    # CHANGELOG.md does not exist yet; linking to it would repeat the defect.
-    refute gemspec.metadata.key?("changelog_uri"),
-           "changelog_uri should only be declared once CHANGELOG.md exists"
+  # Every declared link must point at a file that is actually in the package,
+  # or the link 404s from RubyGems exactly as the homepage used to.
+  def test_gemspec_links_point_at_packaged_files
+    gemspec.metadata.each do |name, url|
+      next unless url.include?("/blob/main/")
+
+      path = url.split("/blob/main/").last
+      assert_includes gemspec.files, path,
+                      "#{name} links to #{path}, which is not packaged"
+      assert File.exist?(File.expand_path("../#{path}", __dir__)),
+             "#{name} links to #{path}, which does not exist"
+    end
   end
 
   # ─── Packaging ─────────────────────────────────────────────────────────────
