@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Thumbnails. `C2PA.configure` gains `thumbnails`, `thumbnail_size`,
+  `thumbnail_format` and `thumbnail_quality`. When enabled, a thumbnail of the
+  asset is embedded in its manifest, and of each ingredient supplied as a file.
+  Off by default: c2pa-rs upscales to its long-edge setting, so at its default
+  of 1024 a 160×120 image gets a 1024×768 thumbnail ten times its own size.
+  Produced for JPEG, PNG, WebP and TIFF; other formats sign without one.
+
+### Changed
+
+- The native extension is built with c2pa-rs's `add_thumbnails` feature, which
+  adds the `image` crate: 16 more crates, about 17 seconds on a cold compile,
+  and 1.5 MB on the compiled extension.
+
 ## [0.4.0] — 2026-09-11
 
 Adds capability on top of 0.3.0. Nothing is removed and no existing call

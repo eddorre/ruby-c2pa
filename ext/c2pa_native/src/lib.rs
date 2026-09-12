@@ -18,9 +18,21 @@ use magnus::{function, prelude::*, Error, Ruby};
 //
 // It currently carries defaults. Exposing settings to Ruby is a separate piece
 // of work; this is the seam that makes it possible.
+// The one place this gem departs from c2pa-rs's defaults. c2pa-rs generates
+// thumbnails when the feature is compiled in, scaling to a 1024px long edge —
+// and it upscales, so a 160x120 source gets a 1024x768 "thumbnail" ten times
+// its size. Off unless asked for; Config::to_json always states the choice.
+const DEFAULT_SETTINGS: &str = r#"{"builder":{"thumbnail":{"enabled":false}}}"#;
+
 fn context_slot() -> &'static RwLock<Arc<Context>> {
     static CONTEXT: OnceLock<RwLock<Arc<Context>>> = OnceLock::new();
-    CONTEXT.get_or_init(|| RwLock::new(Context::new().into_shared()))
+    CONTEXT.get_or_init(|| {
+        let context = Context::new()
+            .with_settings(DEFAULT_SETTINGS)
+            .expect("built-in default settings are valid")
+            .into_shared();
+        RwLock::new(context)
+    })
 }
 
 fn shared_context() -> Arc<Context> {

@@ -38,6 +38,27 @@ module C2PA
     # network requests.
     attr_accessor :ocsp_fetch
 
+    # Whether to embed a thumbnail of the asset in its manifest, and of each
+    # ingredient supplied as a file.
+    #
+    # Off by default, which departs from c2pa-rs. Its thumbnail generation
+    # scales to a fixed long edge and upscales to reach it, so a 160x120 image
+    # gets a 1024x768 thumbnail ten times its own size. Turn it on for assets
+    # that are larger than thumbnail_size, or set thumbnail_size to suit.
+    #
+    # Thumbnails are produced for JPEG, PNG, WebP and TIFF. Other formats are
+    # signed without one; c2pa-rs treats that as non-fatal.
+    attr_accessor :thumbnails
+
+    # Longest edge of the thumbnail in pixels. c2pa-rs's default is 1024.
+    attr_accessor :thumbnail_size
+
+    # :jpeg, :png or :gif. Left unset, c2pa-rs picks the smaller encoding.
+    attr_accessor :thumbnail_format
+
+    # :low, :medium or :high. c2pa-rs's default is :medium.
+    attr_accessor :thumbnail_quality
+
     def initialize
       @trust_anchors = nil
       @trust_list = nil
@@ -45,6 +66,10 @@ module C2PA
       @verify_trust = nil
       @remote_manifest_fetch = nil
       @ocsp_fetch = nil
+      @thumbnails = false
+      @thumbnail_size = nil
+      @thumbnail_format = nil
+      @thumbnail_quality = nil
     end
 
     # The settings document c2pa-rs expects.
@@ -64,7 +89,14 @@ module C2PA
       verify["remote_manifest_fetch"] = @remote_manifest_fetch unless @remote_manifest_fetch.nil?
       verify["ocsp_fetch"] = @ocsp_fetch                       unless @ocsp_fetch.nil?
 
-      settings = {}
+      # enabled is always sent: this gem's default differs from c2pa-rs's, so
+      # leaving it out would mean inheriting the wrong one.
+      thumbnail = { "enabled" => @thumbnails == true }
+      thumbnail["long_edge"] = Integer(@thumbnail_size)          unless @thumbnail_size.nil?
+      thumbnail["format"] = @thumbnail_format.to_s.downcase   unless @thumbnail_format.nil?
+      thumbnail["quality"] = @thumbnail_quality.to_s.downcase unless @thumbnail_quality.nil?
+
+      settings = { "builder" => { "thumbnail" => thumbnail } }
       settings["trust"] = trust unless trust.empty?
       settings["verify"] = verify unless verify.empty?
 

@@ -642,9 +642,12 @@ class C2PATest < Minitest::Test
   end
 
   # Only what the caller sets is sent, so anything untouched keeps c2pa-rs's
-  # default rather than being pinned to ours.
-  def test_an_empty_configuration_sends_no_settings
-    assert_equal "{}", C2PA::Config.new.to_json
+  # default rather than being pinned to ours. The single exception is the
+  # thumbnail switch, where this gem's default deliberately differs, so it is
+  # always stated.
+  def test_an_empty_configuration_sends_only_the_thumbnail_default
+    assert_equal({ "builder" => { "thumbnail" => { "enabled" => false } } },
+                 JSON.parse(C2PA::Config.new.to_json))
   end
 
   def test_network_fetches_can_be_disabled
@@ -655,6 +658,120 @@ class C2PATest < Minitest::Test
     settings = JSON.parse(config.to_json)
     assert_equal false, settings.dig("verify", "remote_manifest_fetch")
     assert_equal false, settings.dig("verify", "ocsp_fetch")
+  end
+
+  # ─── Thumbnails ────────────────────────────────────────────────────────────
+  #
+  # c2pa-rs can embed a thumbnail of the asset, and of each ingredient given
+  # as a file. This gem compiles the feature in but defaults it off, because
+  # c2pa-rs upscales to its long-edge setting: a 160x120 source gets a
+  # 1024x768 thumbnail, ten times the size of the asset. Callers opt in and
+  # can set the size.
+
+  def thumbnail_of(active)
+    active.dig("thumbnail", "format")
+  end
+
+  # Runs in a fresh process on purpose. Settings are global, and every other
+  # test here resets them through C2PA.configure, which sends the gem's
+  # thumbnail default from Ruby. That masks the native layer's own initial
+  # default, which is what a caller who never configures anything gets. A
+  # mutation making the native default inherit c2pa-rs's (thumbnails on) was
+  # invisible to an in-process test for exactly this reason.
+  def test_thumbnails_are_off_by_default_in_a_fresh_process
+    assert_certificates_present
+    script = <<~RUBY
+      require "c2pa"
+      require "tmpdir"
+      Dir.mktmpdir do |dir|
+        output = File.join(dir, "signed.jpg")
+        manifest = C2PA::Manifest.new(title: "fresh")
+          .add_action(C2PA::Actions::CREATED, digital_source_type: #{DIGITAL_CAPTURE.inspect})
+        C2PA.sign(file: #{File.join(FIXTURES, 'tiny.jpg').inspect}, output: output,
+                  certificate: #{CERT.inspect}, key: #{KEY.inspect}, manifest: manifest)
+        active = C2PA.read(file: output)["manifests"].values.first
+        print active.key?("thumbnail") ? "THUMBNAIL" : "NONE"
+      end
+    RUBY
+    lib = File.expand_path("../lib", __dir__)
+    result = IO.popen([RbConfig.ruby, "-I", lib, "-e", script], err: %i[child out], &:read)
+
+    assert_equal "NONE", result.strip,
+                 "a process that never calls C2PA.configure must not generate thumbnails"
+  end
+
+  def test_thumbnails_can_be_enabled
+    assert_certificates_present
+    C2PA.configure { |config| config.thumbnails = true; config.thumbnail_size = 160 }
+
+    read_back(created_manifest) do |active, _|
+      assert_equal "image/jpeg", thumbnail_of(active)
+    end
+  ensure
+    C2PA.configure
+  end
+
+  def test_a_file_backed_ingredient_gets_a_thumbnail_when_enabled
+    assert_certificates_present
+    C2PA.configure { |config| config.thumbnails = true; config.thumbnail_size = 160 }
+
+    manifest = created_manifest.add_ingredient(
+      title: "source", format: "image/png", instance_id: "xmp:iid:source",
+      relationship: "componentOf", file: File.join(FIXTURES, "tiny.png")
+    )
+    read_back(manifest) do |active, _|
+      assert_equal "image/jpeg", active.dig("ingredients", 0, "thumbnail", "format")
+    end
+  ensure
+    C2PA.configure
+  end
+
+  def test_thumbnail_format_and_quality_are_honoured
+    assert_certificates_present
+    C2PA.configure do |config|
+      config.thumbnails = true
+      config.thumbnail_size = 160
+      config.thumbnail_format = :png
+      config.thumbnail_quality = :low
+    end
+
+    read_back(created_manifest) do |active, _|
+      assert_equal "image/png", thumbnail_of(active)
+    end
+  ensure
+    C2PA.configure
+  end
+
+  # The reason the default is off: at c2pa-rs's default long edge the
+  # thumbnail of a small asset is far larger than the asset. Capping the size
+  # to the source dimensions keeps it small.
+  def test_thumbnail_size_controls_output_size
+    assert_certificates_present
+    sizes = {}
+
+    [1024, 160].each do |edge|
+      C2PA.configure { |config| config.thumbnails = true; config.thumbnail_size = edge }
+      sign_fixture("tiny.jpg", created_manifest) { |output| sizes[edge] = File.size(output) }
+    end
+
+    assert_operator sizes[1024], :>, sizes[160] * 2,
+                    "a 1024px thumbnail of a 160px source should be much larger than a 160px one"
+  ensure
+    C2PA.configure
+  end
+
+  # Formats the image crate cannot decode are signed without a thumbnail
+  # rather than failing.
+  def test_unsupported_formats_sign_without_a_thumbnail
+    assert_certificates_present
+    C2PA.configure { |config| config.thumbnails = true; config.thumbnail_size = 160 }
+
+    read_back(created_manifest, fixture: "tiny.wav") do |active, result|
+      assert_includes C2PA::VALID_STATES, result["validation_state"]
+      assert_nil thumbnail_of(active)
+    end
+  ensure
+    C2PA.configure
   end
 
   # ─── Concurrency ───────────────────────────────────────────────────────────
