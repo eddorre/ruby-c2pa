@@ -427,9 +427,9 @@ environments that cannot reach a trust list at all.
 Each format below has a fixture and a signing test in the suite: the file is
 signed, read back, and asserted to validate.
 
-| Format | MIME type |
-|--------|-----------|
-| JPEG | `image/jpeg` |
+| Format | MIME type | |
+|--------|-----------|--|
+| JPEG | `image/jpeg` | |
 | PNG | `image/png` |
 | WebP | `image/webp` |
 | TIFF | `image/tiff` |
@@ -439,19 +439,31 @@ signed, read back, and asserted to validate.
 | MOV | `video/quicktime` |
 | MP3 | `audio/mpeg` |
 | WAV | `audio/wav` |
+| PDF | `application/pdf` | read only, see below |
 
 The format is detected automatically from the file extension.
 
 JPEG XL must be in the ISOBMFF container form. A bare codestream has no boxes
 to hold a manifest, and c2pa-rs rejects it.
 
-### Not supported
+### PDF is read-only
 
-**PDF cannot be signed.** c2pa-rs can read C2PA data out of a PDF but has no
-writer for it — `get_writer` returns `None` and `save_cai_store` returns
-`NotImplemented` — so `C2PA.sign` raises `C2PA::SigningError` with
-`type is unsupported`. This is true at every c2pa-rs version. Earlier releases
-of this gem listed PDF as supported; that was never correct.
+`C2PA.read` works on a PDF that carries content credentials, such as one signed
+by Adobe Acrobat. `C2PA.sign` does not: c2pa-rs has no PDF writer at any
+version. `get_writer` returns `None` and `save_cai_store` returns
+`NotImplemented`, and upstream closed the request to expose one in December
+2025 (contentauth/c2pa-rs#527). Signing a PDF raises `C2PA::SigningError`
+with `type is unsupported`.
+
+Earlier releases of this gem listed PDF as signable. That was never correct.
+
+One limit on what the test suite can show. It proves the PDF handler is active,
+by reading a PDF with no credentials and getting `no JUMBF data found` rather
+than `type is unsupported`. It cannot prove that a signed PDF returns its
+manifest, because nothing available can produce one: c2pa-rs cannot write
+them, and no local tool can either. The code doing the reading is c2pa-rs's
+own and is tested upstream; what is untested here is only this gem's
+integration with the success path.
 
 ### Test fixtures
 

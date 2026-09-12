@@ -293,23 +293,58 @@ class C2PATest < Minitest::Test
     end
   end
 
-  # c2pa-rs has no PDF writer: pdf_io.rs returns None from get_writer and
-  # NotImplemented from save_cai_store. This is true at every version, so the
-  # README must not advertise PDF signing. Asserting the failure keeps the
-  # documentation honest — if upstream ever adds a writer, this test fails and
-  # the claim can be restored deliberately.
+  # ─── PDF ───────────────────────────────────────────────────────────────────
+  #
+  # c2pa-rs can read content credentials from a PDF but cannot write them.
+  # pdf_io.rs returns None from get_writer and NotImplemented from
+  # save_cai_store, and upstream closed the request to expose a writer in
+  # December 2025. This is true at every version, so the README must not
+  # advertise PDF signing.
+  #
+  # Reading is enabled through the `pdf` cargo feature. The suite can prove
+  # the handler is active — it parses a PDF and looks for credentials — but not
+  # that it returns a manifest when one is present, because nothing available
+  # can produce a C2PA-signed PDF. c2pa-rs cannot, and neither can any local
+  # tool. That gap is stated in the README rather than hidden.
+
   def test_pdf_signing_is_not_supported
     assert_certificates_present
+    dir = Dir.mktmpdir
 
-    Tempfile.create(["unsigned", ".pdf"]) do |pdf|
+    error = assert_raises(C2PA::SigningError) do
+      C2PA.sign(file: File.join(FIXTURES, "tiny.pdf"), output: File.join(dir, "signed.pdf"),
+                certificate: CERT, key: KEY, manifest: created_manifest)
+    end
+    assert_match(/unsupported/i, error.message)
+  ensure
+    FileUtils.remove_entry(dir) if dir && File.exist?(dir)
+  end
+
+  # With the feature off this raises "type is unsupported" without opening
+  # the file. With it on, the handler parses the PDF, searches its associated
+  # files for a C2PA entry, and reports that none is there. The message is the
+  # evidence that reading is wired up.
+  def test_pdf_reading_is_enabled
+    error = assert_raises(C2PA::ReadError) do
+      C2PA.read(file: File.join(FIXTURES, "tiny.pdf"))
+    end
+
+    assert_match(/no JUMBF data found/, error.message,
+                 "expected the PDF to be parsed and found to carry no credentials")
+    refute_match(/unsupported/i, error.message,
+                 "'unsupported' means the pdf feature is not enabled")
+  end
+
+  # A PDF the handler cannot parse fails as a parse error, not as an
+  # unsupported type — the same evidence from the other direction.
+  def test_a_malformed_pdf_fails_at_parsing_not_at_type_detection
+    Tempfile.create(["broken", ".pdf"]) do |pdf|
       pdf.write("%PDF-1.4\n%%EOF\n")
       pdf.flush
 
-      error = assert_raises(C2PA::SigningError) do
-        C2PA.sign(file: pdf.path, output: "#{pdf.path}.signed.pdf",
-                  certificate: CERT, key: KEY, manifest: created_manifest)
-      end
-      assert_match(/unsupported/i, error.message)
+      error = assert_raises(C2PA::ReadError) { C2PA.read(file: pdf.path) }
+      assert_match(/could not be parsed/, error.message)
+      refute_match(/unsupported/i, error.message)
     end
   end
 
