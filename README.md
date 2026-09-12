@@ -438,6 +438,28 @@ C2PA.configure do |config|
 end
 ```
 
+### Thumbnails
+
+c2pa-rs can embed a thumbnail of the asset in its manifest, and of each
+ingredient supplied as a file. Verify tools show it alongside the credentials.
+It is off unless you turn it on:
+
+```ruby
+C2PA.configure do |config|
+  config.thumbnails     = true
+  config.thumbnail_size = 512      # longest edge in pixels
+end
+```
+
+The default is off because c2pa-rs scales to a fixed long edge and upscales to
+reach it. Its own default is 1024, so a 160×120 image gets a 1024×768
+thumbnail, roughly ten times the size of the asset it describes. Set
+`thumbnail_size` no larger than your assets, or leave thumbnails off for small
+images.
+
+Thumbnails are produced for JPEG, PNG, WebP and TIFF. Other formats sign
+without one; c2pa-rs treats that as non-fatal.
+
 ### Everything configurable
 
 | Setting | Default | Purpose |
@@ -448,10 +470,15 @@ end
 | `verify_trust` | `true` | whether trust is checked at all |
 | `remote_manifest_fetch` | `true` | whether reading may fetch over the network |
 | `ocsp_fetch` | `false` | whether revocation is checked over OCSP |
+| `thumbnails` | `false` | embed a thumbnail of the asset and of file-backed ingredients |
+| `thumbnail_size` | 1024 | longest edge of the thumbnail, in pixels |
+| `thumbnail_format` | smallest | `:jpeg`, `:png` or `:gif` |
+| `thumbnail_quality` | `:medium` | `:low`, `:medium` or `:high` |
 
 Settings are global and apply to subsequent calls. Only values you set are
-sent, so anything left alone keeps c2pa-rs's own default. `C2PA.configure` with
-no block resets everything.
+sent, so anything left alone keeps c2pa-rs's own default, with one exception:
+`thumbnails` is always sent, because this gem's default differs from c2pa-rs's.
+`C2PA.configure` with no block resets everything.
 
 Turning `verify_trust` off means nothing is ever reported as untrusted, which
 in a library for establishing provenance is rarely what you want. It exists for
