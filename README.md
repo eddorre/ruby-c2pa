@@ -355,8 +355,8 @@ The signed manifest then reads:
 {
   "name": "Acme Editor",
   "version": "2.0",
-  "org.rubygems.ruby_c2pa": "0.3.0",
-  "org.contentauth.c2pa_rs": "0.78.8"
+  "org.contentauth.c2pa_rs": "0.90.22",
+  "org.rubygems.ruby_c2pa": "0.4.0"
 }
 ```
 
@@ -370,12 +370,15 @@ calling application.
 ### Checking the SDK version
 
 ```ruby
-puts C2PA.sdk_version  # => "0.78.3"  (depends on the c2pa-rs version bundled with the gem)
+puts C2PA.sdk_version  # => "0.90.22"  (the c2pa-rs version the gem was built against)
 ```
 
 ### Error handling
 
-All errors inherit from `C2PA::Error`, so you can rescue broadly or narrowly:
+All errors inherit from `C2PA::Error`, so you can rescue broadly or narrowly.
+`SigningError` covers signing and the post-signing verification, `ReadError`
+reading, `InvalidManifestError` anything the builder rejects, and
+`InvalidSettingsError` anything `C2PA.configure` cannot use.
 
 ```ruby
 begin
@@ -390,6 +393,12 @@ begin
   C2PA.read(file: "photo_signed.jpg")
 rescue C2PA::ReadError => e
   puts "Could not read manifest: #{e.message}"
+end
+
+begin
+  C2PA.configure { |config| config.trust_anchors = "ca/root.pem" }
+rescue C2PA::InvalidSettingsError => e
+  puts "Settings not usable: #{e.message}"
 end
 
 # Or rescue any C2PA error broadly
@@ -525,20 +534,28 @@ Ruby (C2PA.sign)
     ▼
 Rust (C2PA::Native.sign_file)
     │
-    │  calls c2pa-rs Builder API
+    │  c2pa-rs Builder, through a shared Context
     ▼
 c2pa-rs — embeds signed manifest into the file
 ```
 
-The Rust extension (`ext/c2pa_native/src/lib.rs`) defines `C2PA::Native` with three methods:
+The Rust extension (`ext/c2pa_native/src/lib.rs`) defines `C2PA::Native` with four methods:
 
 | Method | Description |
 |--------|-------------|
-| `C2PA::Native.sign_file` | Sign a file and write the result |
+| `C2PA::Native.sign_file` | Sign a file and write the result. Takes the manifest JSON, an optional intent, and any ingredient files |
 | `C2PA::Native.read_file` | Read and return the manifest JSON |
+| `C2PA::Native.configure` | Replace the shared c2pa-rs Context with one built from a settings document |
 | `C2PA::Native.sdk_version` | Return the c2pa-rs version string |
 
-Input validation (missing files, invalid manifests) is handled in Ruby before calling into Rust. Errors from the native layer are caught and re-raised as typed `C2PA::Error` subclasses.
+Signing and reading go through one c2pa-rs `Context`, built once and shared
+across threads. `C2PA.configure` replaces it rather than mutating it, so a
+signing call already in flight keeps the settings it started with.
+
+Input validation (missing files, invalid manifests, unreadable ingredient
+files, unusable settings) is handled in Ruby before calling into Rust. Errors
+from the native layer are caught and re-raised as typed `C2PA::Error`
+subclasses.
 
 ## Contributing
 
