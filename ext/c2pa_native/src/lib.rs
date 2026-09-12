@@ -256,6 +256,7 @@ fn sign_file(
 // The slice is copied out at once, since Ruby may move or free the backing
 // store the moment control returns to it.
 fn sign_buffer(
+    ruby: &Ruby,
     data: RString,
     format: String,
     cert: String,
@@ -276,7 +277,7 @@ fn sign_buffer(
     };
 
     let signed = do_sign_buffer(&bytes, &format, &request).map_err(runtime_error)?;
-    Ok(RString::from_slice(&signed))
+    Ok(ruby.str_from_slice(&signed))
 }
 
 fn read_file(path: String) -> Result<String, Error> {
