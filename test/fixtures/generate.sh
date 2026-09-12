@@ -126,5 +126,36 @@ for spec in "tiny.mp4 mp4" "tiny.mov mov"; do
   size_of "$1"
 done
 
+echo "Document"
+# Written by hand rather than through a tool: no PDF generator is portable
+# across macOS and Linux, and a minimal file is all the read path needs. The
+# cross-reference table must carry correct byte offsets or lopdf rejects the
+# file, so each object's offset is measured as it is appended.
+say "tiny.pdf"
+{
+  pdf=tiny.pdf
+  printf '%%PDF-1.4\n' > "$pdf"
+  offsets=()
+  add_object() {
+    offsets+=("$(wc -c < "$pdf" | tr -d ' ')")
+    printf '%s\n' "$1" >> "$pdf"
+  }
+  add_object '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj'
+  add_object '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj'
+  add_object '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj'
+  content='BT /F1 18 Tf 20 40 Td (ruby-c2pa) Tj ET'
+  add_object "4 0 obj << /Length ${#content} >> stream
+${content}
+endstream endobj"
+  add_object '5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj'
+  xref=$(wc -c < "$pdf" | tr -d ' ')
+  {
+    printf 'xref\n0 6\n0000000000 65535 f \n'
+    for o in "${offsets[@]}"; do printf '%010d 00000 n \n' "$o"; done
+    printf 'trailer << /Size 6 /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n' "$xref"
+  } >> "$pdf"
+}
+size_of tiny.pdf
+
 echo
 printf 'Total: %s\n' "$(du -sh . | cut -f1)"
