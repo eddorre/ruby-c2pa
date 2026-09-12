@@ -57,9 +57,15 @@ bundle exec ruby -Ilib -Itest test/c2pa_test.rb
 git checkout -- lib/c2pa/manifest.rb
 ```
 
+`git checkout --` is only safe if the file has no uncommitted changes of its
+own. Mid-change it reverts your work along with the mutation, and the suite
+then fails for a reason that has nothing to do with the test. Copy the file
+aside before mutating and restore from the copy, and run the unmutated suite
+afterwards as a control. That control run is what catches a bad restore.
+
 Then state it in the pull request:
 
-> Verified by reversing the title in `Manifest#to_json`: 19 failures, against 0
+> Verified by reversing the title in `Manifest#to_json`: 21 failures, against 0
 > for the unmutated suite.
 
 A broad mutation like that trips many tests, which is fine. A narrow one that
