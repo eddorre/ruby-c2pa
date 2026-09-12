@@ -323,6 +323,45 @@ C2PA.sign(
 )
 ```
 
+### Signing bytes in memory
+
+For data that never touches the filesystem, such as an upload held in a
+request body or an image your application generated, `C2PA.sign_buffer` takes
+the bytes and returns the signed bytes. The format must be given, since there
+is no filename to infer it from.
+
+```ruby
+signed = C2PA.sign_buffer(
+  data:        request.body.read,
+  format:      "image/jpeg",
+  certificate: "cert.pem",
+  key:         "key.pem",
+  manifest:    manifest
+)
+```
+
+The input must be a binary string (`Encoding::BINARY`, which is what
+`File.binread` and `IO#read` on a binary-mode stream return). A string tagged
+UTF-8 is rejected with an `ArgumentError` rather than transcoded, because a
+transcoded JPEG is a corrupt JPEG and nothing notices until a verifier rejects
+it. If you have such a string and know the bytes are intact, call `.b` on it.
+
+The same verify-after-sign guard applies. A result that does not validate is
+never returned; `C2PA::SigningError` is raised instead, and `verify: false`
+returns it anyway. `algorithm:` and everything on the manifest, including
+intents and ingredient files, work as they do for `C2PA.sign`.
+
+Memory is the trade-off. The input, the copy c2pa-rs works on, and the signed
+result on both sides of the Ruby boundary are resident at once at the peak,
+so budget about four times the size of the asset per call. For a photo that
+is nothing; for a feature-length video it is a reason to use `C2PA.sign` with
+paths instead.
+
+The call holds Ruby's global VM lock for its duration, as `C2PA.sign` does.
+Signing is fast (a 115 MB WAV signs in about 150 ms on an M-series laptop),
+but other Ruby threads in the process do not run during that time. Releasing
+the lock during signing is tracked separately.
+
 ### Reading a manifest
 
 ```ruby
@@ -331,6 +370,15 @@ result = C2PA.read(file: "photo_signed.jpg")
 active = result["manifests"][result["active_manifest"]]
 puts active["title"]
 puts active["claim_generator_info"].first["name"]   # => "ruby-c2pa"
+```
+
+From memory, `C2PA.read_buffer` takes the bytes. c2pa-rs identifies most
+formats from the leading bytes, so the format is optional; it is needed for a
+format with no signature to sniff, such as SVG.
+
+```ruby
+result = C2PA.read_buffer(data: signed)
+result = C2PA.read_buffer(data: svg_bytes, format: "image/svg+xml")
 ```
 
 ### Naming your application
@@ -566,12 +614,14 @@ Rust (C2PA::Native.sign_file)
 c2pa-rs — embeds signed manifest into the file
 ```
 
-The Rust extension (`ext/c2pa_native/src/lib.rs`) defines `C2PA::Native` with four methods:
+The Rust extension (`ext/c2pa_native/src/lib.rs`) defines `C2PA::Native` with six methods:
 
 | Method | Description |
 |--------|-------------|
 | `C2PA::Native.sign_file` | Sign a file and write the result. Takes the manifest JSON, an optional intent, and any ingredient files |
+| `C2PA::Native.sign_buffer` | The same over bytes: a binary string in, the signed binary string out |
 | `C2PA::Native.read_file` | Read and return the manifest JSON |
+| `C2PA::Native.read_buffer` | The same over bytes, with an optional format hint |
 | `C2PA::Native.configure` | Replace the shared c2pa-rs Context with one built from a settings document |
 | `C2PA::Native.sdk_version` | Return the c2pa-rs version string |
 

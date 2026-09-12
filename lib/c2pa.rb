@@ -97,6 +97,75 @@ module C2PA
     output
   end
 
+  # Sign bytes held in memory, returning the signed bytes.
+  #
+  # The counterpart to C2PA.sign for data you already have loaded, such as an
+  # upload. The format must be given, since there is no filename to infer it
+  # from. Input must be binary; a UTF-8-tagged string is rejected rather than
+  # transcoded, because that would corrupt the asset.
+  #
+  # The input, the working copy and the result on both sides of the boundary
+  # are resident at once, so budget about four times the asset. Prefer
+  # C2PA.sign with paths for large video.
+  #
+  # @param data        [String]          the asset, as a binary string
+  # @param format      [String]          MIME type, e.g. "image/jpeg"
+  # @param certificate [String]          path to a PEM-encoded X.509 certificate chain
+  # @param key         [String]          path to a PEM-encoded private key
+  # @param algorithm   [String]          signing algorithm (default: "es256")
+  # @param manifest    [C2PA::Manifest]  the manifest to embed
+  # @param verify      [Boolean]         read the result back and confirm it validates
+  # @return            [String]          the signed asset, as a binary string
+  # @raise [C2PA::SigningError] if signing fails, or if the result does not validate
+  #
+  # @example
+  #   signed = C2PA.sign_buffer(
+  #     data:        File.binread("photo.jpg"),
+  #     format:      "image/jpeg",
+  #     certificate: "cert.pem",
+  #     key:         "key.pem",
+  #     manifest:    manifest
+  #   )
+  def self.sign_buffer(data:, format:, certificate:, key:, algorithm: "es256", manifest:, verify: true)
+    manifest_json = manifest.to_json
+    data = binary!(data, "data")
+
+    raise SigningError, "Certificate file not found: '#{certificate}'" unless File.exist?(certificate)
+    raise SigningError, "Key file not found: '#{key}'"                 unless File.exist?(key)
+
+    signed =
+      begin
+        intent = manifest.respond_to?(:intent) ? manifest.intent&.to_s : nil
+        files = manifest.respond_to?(:ingredient_files) ? manifest.ingredient_files : []
+        ingredient_files = files.empty? ? nil : JSON.generate(files)
+        Native.sign_buffer(data, format, certificate, key, algorithm, manifest_json,
+                           intent, ingredient_files)
+      rescue RuntimeError => e
+        raise SigningError, e.message
+      end
+
+    verify_signed_buffer!(signed, format) if verify
+
+    signed
+  end
+
+  # Read the C2PA manifest embedded in bytes held in memory.
+  #
+  # c2pa-rs identifies most formats from the leading bytes and ignores the
+  # hint when the two disagree. The hint matters for formats with no signature
+  # to sniff, such as SVG, which cannot be read without it.
+  #
+  # @param data   [String]      the asset, as a binary string
+  # @param format [String, nil] MIME type or extension, e.g. "image/svg+xml"
+  # @return       [Hash]        parsed manifest JSON
+  # @raise        [C2PA::ReadError] if the data has no valid manifest
+  def self.read_buffer(data:, format: nil)
+    data = binary!(data, "data")
+    JSON.parse(Native.read_buffer(data, format))
+  rescue RuntimeError => e
+    raise ReadError, e.message
+  end
+
   # Read the C2PA manifest embedded in a signed file.
   #
   # @param file [String] path to the signed file
@@ -154,6 +223,46 @@ module C2PA
           "The output file has been removed. Pass verify: false to keep it for inspection."
   end
   private_class_method :verify_signed_output!
+
+  # The buffer counterpart to verify_signed_output!. Nothing to delete: a
+  # rejected result is simply not returned.
+  def self.verify_signed_buffer!(signed, format)
+    result =
+      begin
+        read_buffer(data: signed, format: format)
+      rescue ReadError => e
+        raise SigningError, "signed data failed verification: could not read it back: #{e.message}"
+      end
+
+    state = result["validation_state"]
+    return if VALID_STATES.include?(state)
+
+    failures = Array(result.dig("validation_results", "activeManifest", "failure"))
+               .map { |failure| "#{failure["code"]} (#{failure["explanation"]})" }
+    detail = failures.empty? ? "no failure detail reported" : failures.uniq.join(", ")
+
+    raise SigningError,
+          "signed data failed verification: validation_state=#{state.inspect}, #{detail}. " \
+          "Pass verify: false to receive it anyway."
+  end
+  private_class_method :verify_signed_buffer!
+
+  # Asset bytes must be binary. The native layer takes the raw bytes whatever
+  # the tag says, so a UTF-8-tagged string could be passed through as-is. It
+  # is refused instead because the tag means the bytes came through a text
+  # path (File.read rather than File.binread), and on Windows that path has
+  # already rewritten line endings. Nothing notices until a verifier rejects
+  # the result. Refusing early turns a silent corruption into an error with a
+  # fix in the message.
+  def self.binary!(data, name)
+    raise ArgumentError, "#{name} must be a String, got #{data.class}" unless data.is_a?(String)
+    return data if data.encoding == Encoding::BINARY
+
+    raise ArgumentError,
+          "#{name} must be a binary string (Encoding::BINARY), got #{data.encoding}. " \
+          "Use File.binread, or call .b on the string."
+  end
+  private_class_method :binary!
 
   # Remove a file this library created and is about to reject.
   def self.discard(path)

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Buffer signing. `C2PA.sign_buffer(data:, format:, ...)` signs bytes held in
+  memory and returns the signed bytes; `C2PA.read_buffer(data:, format: nil)`
+  reads them back. Both require a binary string and raise `ArgumentError` for
+  any other encoding rather than transcoding the asset. The verify-after-sign
+  guard applies to buffers as it does to files. Memory use is about four
+  times the asset, and the call holds the GVL for its duration, as file
+  signing does.
 - Thumbnails. `C2PA.configure` gains `thumbnails`, `thumbnail_size`,
   `thumbnail_format` and `thumbnail_quality`. When enabled, a thumbnail of the
   asset is embedded in its manifest, and of each ingredient supplied as a file.
