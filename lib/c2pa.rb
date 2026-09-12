@@ -84,7 +84,10 @@ module C2PA
       # to_json is the only thing genuinely required of a manifest, so an
       # object that provides just that still signs — as a creation.
       intent = manifest.respond_to?(:intent) ? manifest.intent&.to_s : nil
-      Native.sign_file(file, output, certificate, key, algorithm, manifest_json, intent)
+      files = manifest.respond_to?(:ingredient_files) ? manifest.ingredient_files : []
+      ingredient_files = files.empty? ? nil : JSON.generate(files)
+      Native.sign_file(file, output, certificate, key, algorithm, manifest_json,
+                       intent, ingredient_files)
     rescue RuntimeError => e
       raise SigningError, e.message
     end

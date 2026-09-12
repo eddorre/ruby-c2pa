@@ -234,15 +234,41 @@ manifest.add_assertion(
 
 ### Adding ingredients
 
-Ingredients record the source assets a file was derived from:
+Ingredients record the source assets a file was derived from. Supply the file
+so c2pa-rs can read it:
 
 ```ruby
 manifest.add_ingredient(
   title:        "Original photo",
   format:       "image/jpeg",
-  instance_id:  "xmp:iid:original-uuid-here"
+  instance_id:  "xmp:iid:original-uuid-here",
+  relationship: "componentOf",
+  file:         "original.jpg"
 )
 ```
+
+If the ingredient already carries content credentials, its manifest is embedded
+in the signed output and the ingredient points at it. A verifier can then
+follow the chain from your asset back through the original. For a file with no
+credentials there is nothing to carry forward.
+
+Omitting `file:` records the description alone. Nothing binds it to any bytes,
+so a verifier cannot check the claim. That form is kept for compatibility;
+prefer the file.
+
+### Updating an existing asset
+
+For a non-editorial change to an asset, such as correcting metadata, use
+`intent: :update`. The source file is the parent, and the change is recorded
+against it without opening a new editing lineage:
+
+```ruby
+manifest = C2PA::Manifest.new(title: "Metadata corrected", intent: :update)
+  .add_action(C2PA::Actions::EDITED_METADATA)
+```
+
+c2pa-rs restricts this mode: there is exactly one ingredient, it is the source
+itself, and the hashed content must not change.
 
 ### Signing a file
 
