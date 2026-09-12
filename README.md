@@ -357,10 +357,11 @@ so budget about four times the size of the asset per call. For a photo that
 is nothing; for a feature-length video it is a reason to use `C2PA.sign` with
 paths instead.
 
-The call holds Ruby's global VM lock for its duration, as `C2PA.sign` does.
-Signing is fast (a 115 MB WAV signs in about 150 ms on an M-series laptop),
-but other Ruby threads in the process do not run during that time. Releasing
-the lock during signing is tracked separately.
+Signing and reading release Ruby's global VM lock while c2pa-rs works, so
+other threads in the process keep running. A threaded server signing a large
+video does not stall its other requests for the duration. One consequence:
+`Thread#kill` and `Timeout` cannot interrupt a native call in progress; they
+take effect when it returns.
 
 ### Reading a manifest
 
@@ -624,6 +625,11 @@ The Rust extension (`ext/c2pa_native/src/lib.rs`) defines `C2PA::Native` with si
 | `C2PA::Native.read_buffer` | The same over bytes, with an optional format hint |
 | `C2PA::Native.configure` | Replace the shared c2pa-rs Context with one built from a settings document |
 | `C2PA::Native.sdk_version` | Return the c2pa-rs version string |
+
+All four run with the global VM lock released, so other Ruby threads are not
+blocked while c2pa-rs hashes and signs. The bytes and paths are copied out of
+Ruby before the lock goes, and the result is turned into a Ruby object after
+it is back; nothing in between touches the interpreter.
 
 Signing and reading go through one c2pa-rs `Context`, built once and shared
 across threads. `C2PA.configure` replaces it rather than mutating it, so a

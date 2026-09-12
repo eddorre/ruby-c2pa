@@ -7,6 +7,7 @@
 
 require "minitest/autorun"
 require "tmpdir"
+require "etc"
 require "tempfile"
 require "fileutils"
 require "c2pa"
@@ -1050,6 +1051,119 @@ class C2PATest < Minitest::Test
     states.each { |state| assert_includes C2PA::VALID_STATES, state }
     assert_equal (0...8).map { |i| "buffer thread #{i}" }.sort, titles.sort,
                  "titles were mixed between threads"
+  end
+
+  # ─── Running without the GVL ───────────────────────────────────────────────
+  #
+  # Native signing and reading release Ruby's global VM lock for the duration
+  # of the c2pa-rs call, so other Ruby threads keep running while an asset is
+  # hashed and signed. Before this, a native call stopped every other Ruby
+  # thread in the process until it returned.
+  #
+  # The measurement is CPU parallelism. One thread runs the native operation
+  # back to back; the main thread runs a Ruby loop alongside it. With the lock
+  # held only one of them can execute at any moment, so the process consumes
+  # about one CPU-second per wall-second. Released, both run at once and it
+  # consumes close to two. The threshold sits between.
+  #
+  # This was not the first design. Measuring how long the Ruby thread stalls,
+  # or how much progress it makes, both misled: the Ruby-side File.exist?
+  # checks in C2PA.sign release the lock themselves (stat does), and the wait
+  # to get it back dominated every wall-clock number. CPU time is indifferent
+  # to waiting, which is what makes it the right measure here.
+
+  PARALLELISM_THRESHOLD = 1.4
+
+  # A valid RIFF/WAVE file of silence. Content does not matter here; c2pa-rs
+  # hashes every byte whatever they are, and volume is what the test needs.
+  def synthetic_wav(bytes)
+    header = ["RIFF", 36 + bytes, "WAVE", "fmt ", 16, 1, 1, 22050, 44100, 2, 16, "data", bytes]
+    header.pack("a4Va4a4VvvVVvva4V") + ("\0".b * bytes)
+  end
+
+  # CPU seconds consumed per wall second while `operation` runs repeatedly in
+  # one thread and a Ruby loop runs in this one. Thread.pass keeps the loop
+  # from hogging the lock for a full quantum each time the other thread wants
+  # it back, so the number reflects the native region rather than lock
+  # handoff latency.
+  def cpu_parallelism(seconds: 0.4, &operation)
+    wall = -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) }
+    cpu = -> { Process.clock_gettime(Process::CLOCK_PROCESS_CPUTIME_ID) }
+
+    wall_start = wall.()
+    cpu_start = cpu.()
+    native = Thread.new { operation.call while wall.() - wall_start < seconds }
+    Thread.pass while native.alive?
+    native.join
+
+    (cpu.() - cpu_start) / (wall.() - wall_start)
+  end
+
+  def assert_runs_alongside_ruby(operation, &block)
+    assert_certificates_present
+    if Etc.nprocessors < 2
+      flunk "this test needs two CPUs to observe parallelism; this machine reports #{Etc.nprocessors}"
+    end
+
+    ratio = cpu_parallelism(&block)
+    assert_operator ratio, :>, PARALLELISM_THRESHOLD,
+                    "#{operation} consumed #{ratio.round(2)} CPU-seconds per wall-second alongside a " \
+                    "Ruby thread; about 1.0 means the GVL is held for the native call, about 2.0 " \
+                    "means it is released"
+  end
+
+  def large_asset
+    @large_asset ||= synthetic_wav(16 * 1024 * 1024)
+  end
+
+  def large_signed_asset
+    assert_certificates_present
+    @large_signed_asset ||= C2PA.sign_buffer(data: large_asset, format: "audio/wav",
+                                             certificate: CERT, key: KEY,
+                                             manifest: created_manifest, verify: false)
+  end
+
+  def test_sign_buffer_releases_the_gvl
+    assert_runs_alongside_ruby("sign_buffer") do
+      C2PA.sign_buffer(data: large_asset, format: "audio/wav", certificate: CERT, key: KEY,
+                       manifest: created_manifest, verify: false)
+    end
+  end
+
+  def test_read_buffer_releases_the_gvl
+    signed = large_signed_asset
+    assert_runs_alongside_ruby("read_buffer") { C2PA.read_buffer(data: signed) }
+  end
+
+  def test_sign_file_releases_the_gvl
+    Dir.mktmpdir do |dir|
+      source = File.join(dir, "large.wav")
+      File.binwrite(source, large_asset)
+      count = 0
+      assert_runs_alongside_ruby("sign_file") do
+        C2PA.sign(file: source, output: File.join(dir, "out-#{count += 1}.wav"),
+                  certificate: CERT, key: KEY, manifest: created_manifest, verify: false)
+      end
+    end
+  end
+
+  def test_read_file_releases_the_gvl
+    Dir.mktmpdir do |dir|
+      signed = File.join(dir, "large-signed.wav")
+      File.binwrite(signed, large_signed_asset)
+      assert_runs_alongside_ruby("read_file") { C2PA.read(file: signed) }
+    end
+  end
+
+  # A Ruby exception cannot be raised while the lock is released, so errors
+  # cross back as values and are raised after. Both native failure modes must
+  # still arrive as the right Ruby exception.
+  def test_errors_still_surface_after_the_gvl_is_reacquired
+    assert_raises(C2PA::ReadError) { C2PA.read_buffer(data: "not an asset".b, format: "image/jpeg") }
+    assert_raises(C2PA::SigningError) do
+      C2PA.sign_buffer(data: "not an asset".b, format: "image/jpeg", certificate: CERT, key: KEY,
+                       manifest: created_manifest)
+    end
   end
 
   # ─── Packaging ─────────────────────────────────────────────────────────────

@@ -219,6 +219,59 @@ fn do_read_file(path: &str) -> Result<String, Box<dyn std::error::Error>> {
     Ok(reader.json())
 }
 
+// ─── Running without the GVL ──────────────────────────────────────────────────
+//
+// Signing and reading are CPU-bound Rust with no need of the interpreter, so
+// they run with Ruby's global VM lock released and other Ruby threads make
+// progress meanwhile. magnus does not wrap rb_thread_call_without_gvl, hence
+// the trampoline: the closure travels through the void pointer, its result
+// travels back the same way, and nothing inside may touch Ruby.
+//
+// A panic must not unwind across the extern "C" frame (Rust aborts if it
+// does), so it is caught on the far side and resumed once the lock is held.
+
+type NoGvlSlot<F, R> = (Option<F>, Option<std::thread::Result<R>>);
+
+unsafe extern "C" fn no_gvl_trampoline<F, R>(arg: *mut std::ffi::c_void) -> *mut std::ffi::c_void
+where
+    F: FnOnce() -> R,
+{
+    let slot = &mut *(arg as *mut NoGvlSlot<F, R>);
+    let f = slot.0.take().expect("closure taken twice");
+    slot.1 = Some(std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)));
+    std::ptr::null_mut()
+}
+
+fn without_gvl<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    let mut slot: NoGvlSlot<F, R> = (Some(f), None);
+
+    // RUBY_UBF_IO is a macro, not a symbol, so bindgen has no name for it. It
+    // is the sentinel (rb_unblock_function_t *)-1, which tells Ruby to use
+    // its own IO unblocker: a Thread#kill or Timeout aimed at this thread
+    // interrupts a blocking syscall (a remote manifest fetch, say) rather
+    // than waiting for the call to finish. Option<fn> has the null niche, so
+    // a non-null bit pattern is a valid Some that Ruby compares by value and
+    // never calls.
+    let ubf: rb_sys::rb_unblock_function_t = unsafe { std::mem::transmute(-1isize) };
+
+    unsafe {
+        rb_sys::rb_thread_call_without_gvl(
+            Some(no_gvl_trampoline::<F, R>),
+            &mut slot as *mut NoGvlSlot<F, R> as *mut std::ffi::c_void,
+            ubf,
+            std::ptr::null_mut(),
+        );
+    }
+
+    match slot.1.expect("closure did not run") {
+        Ok(value) => value,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
 // ─── Ruby-facing functions ────────────────────────────────────────────────────
 
 fn runtime_error(e: BoxError) -> Error {
@@ -247,7 +300,7 @@ fn sign_file(
         ingredient_files_json: ingredient_files.as_deref(),
     };
 
-    do_sign_file(&source, &dest, &request).map_err(runtime_error)?;
+    without_gvl(|| do_sign_file(&source, &dest, &request)).map_err(runtime_error)?;
     Ok(dest)
 }
 
@@ -276,12 +329,12 @@ fn sign_buffer(
         ingredient_files_json: ingredient_files.as_deref(),
     };
 
-    let signed = do_sign_buffer(&bytes, &format, &request).map_err(runtime_error)?;
+    let signed = without_gvl(|| do_sign_buffer(&bytes, &format, &request)).map_err(runtime_error)?;
     Ok(ruby.str_from_slice(&signed))
 }
 
 fn read_file(path: String) -> Result<String, Error> {
-    do_read_file(&path).map_err(runtime_error)
+    without_gvl(|| do_read_file(&path)).map_err(runtime_error)
 }
 
 // c2pa-rs sniffs the container from the leading bytes and lets the hint win
@@ -290,7 +343,7 @@ fn read_file(path: String) -> Result<String, Error> {
 fn read_buffer(data: RString, format: Option<String>) -> Result<String, Error> {
     let bytes = unsafe { data.as_slice() }.to_vec();
     let format = format.as_deref().unwrap_or("application/octet-stream");
-    do_read_buffer(&bytes, format).map_err(runtime_error)
+    without_gvl(|| do_read_buffer(&bytes, format)).map_err(runtime_error)
 }
 
 fn configure(settings_json: String) -> Result<(), Error> {
