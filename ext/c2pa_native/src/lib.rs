@@ -1,8 +1,9 @@
 use std::fs::File;
+use std::io::Cursor;
 use std::path::Path;
 use std::sync::{Arc, RwLock, OnceLock};
 use c2pa::{create_signer, Builder, BuilderIntent, Context, Reader, SigningAlg};
-use magnus::{function, prelude::*, Error, Ruby};
+use magnus::{function, prelude::*, Error, RString, Ruby};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -128,49 +129,87 @@ fn add_ingredient_files(
     Ok(())
 }
 
-fn do_sign_file(
-    source_path: &str,
-    dest_path: &str,
-    cert_path: &str,
-    key_path: &str,
-    alg_str: &str,
-    manifest_json: Option<&str>,
-    intent_str: Option<&str>,
-    ingredient_files_json: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
+type BoxError = Box<dyn std::error::Error>;
+
+// The description of what to sign, shared by the file and buffer paths.
+struct SigningRequest<'a> {
+    cert_path: &'a str,
+    key_path: &'a str,
+    alg: &'a str,
+    manifest_json: Option<&'a str>,
+    intent: Option<&'a str>,
+    ingredient_files_json: Option<&'a str>,
+}
+
+fn build_signer(cert_path: &str, key_path: &str, alg_str: &str) -> Result<Box<dyn c2pa::Signer + Send + Sync>, BoxError> {
     let cert = std::fs::read(cert_path)
         .map_err(|e| format!("Cannot read certificate '{}': {}", cert_path, e))?;
     let key = std::fs::read(key_path)
         .map_err(|e| format!("Cannot read key '{}': {}", key_path, e))?;
 
     let alg = alg_from_str(alg_str)?;
-    let signer = create_signer::from_keys(&cert, &key, alg, None)
-        .map_err(|e| format!("Failed to create signer: {}", e))?;
+    create_signer::from_keys(&cert, &key, alg, None)
+        .map_err(|e| format!("Failed to create signer: {}", e).into())
+}
 
-    let title = Path::new(source_path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown")
-        .replace('"', "\\\"");
-    let default_json = format!(r#"{{"title": "{}"}}"#, title);
-    let json = manifest_json.unwrap_or(&default_json);
+// A Builder carrying the manifest, intent and ingredients, ready to sign.
+// `fallback_title` is used only when no manifest JSON was supplied.
+fn build_builder(request: &SigningRequest, fallback_title: &str) -> Result<Builder, BoxError> {
+    let default_json = format!(r#"{{"title": "{}"}}"#, fallback_title.replace('"', "\\\""));
+    let json = request.manifest_json.unwrap_or(&default_json);
 
     let mut builder = Builder::from_shared_context(&shared_context())
         .with_definition(json)
         .map_err(|e| format!("Invalid manifest JSON: {}", e))?;
 
-    if let Some(intent) = intent_str {
+    if let Some(intent) = request.intent {
         builder.set_intent(intent_from_str(intent)?);
     }
 
-    if let Some(files) = ingredient_files_json {
+    if let Some(files) = request.ingredient_files_json {
         add_ingredient_files(&mut builder, files)?;
     }
 
-    builder.sign_file(&*signer, source_path, dest_path)
+    Ok(builder)
+}
+
+fn do_sign_file(source_path: &str, dest_path: &str, request: &SigningRequest) -> Result<(), BoxError> {
+    let signer = build_signer(request.cert_path, request.key_path, request.alg)?;
+
+    let title = Path::new(source_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
+    let mut builder = build_builder(request, title)?;
+
+    builder
+        .sign_file(&*signer, source_path, dest_path)
         .map_err(|e| format!("Signing failed: {}", e))?;
 
     Ok(())
+}
+
+// Sign bytes held in memory. The source is read through a Cursor, and the
+// destination has to be one too: c2pa-rs writes the asset and then seeks back
+// to hash it and patch the manifest in, so a write-only sink will not do.
+fn do_sign_buffer(data: &[u8], format: &str, request: &SigningRequest) -> Result<Vec<u8>, BoxError> {
+    let signer = build_signer(request.cert_path, request.key_path, request.alg)?;
+    let mut builder = build_builder(request, "buffer")?;
+
+    let mut source = Cursor::new(data);
+    let mut dest = Cursor::new(Vec::new());
+    builder
+        .sign(&*signer, format, &mut source, &mut dest)
+        .map_err(|e| format!("Signing failed: {}", e))?;
+
+    Ok(dest.into_inner())
+}
+
+fn do_read_buffer(data: &[u8], format: &str) -> Result<String, BoxError> {
+    let reader = Reader::from_shared_context(&shared_context())
+        .with_stream(format, Cursor::new(data))
+        .map_err(|e| format!("Failed to read manifest from buffer: {}", e))?;
+    Ok(reader.json())
 }
 
 fn do_read_file(path: &str) -> Result<String, Box<dyn std::error::Error>> {
@@ -182,6 +221,13 @@ fn do_read_file(path: &str) -> Result<String, Box<dyn std::error::Error>> {
 
 // ─── Ruby-facing functions ────────────────────────────────────────────────────
 
+fn runtime_error(e: BoxError) -> Error {
+    Error::new(
+        Ruby::get().expect("called from Ruby thread").exception_runtime_error(),
+        e.to_string(),
+    )
+}
+
 fn sign_file(
     source: String,
     dest: String,
@@ -192,27 +238,63 @@ fn sign_file(
     intent: Option<String>,
     ingredient_files: Option<String>,
 ) -> Result<String, Error> {
-    let alg_str = alg.as_deref().unwrap_or("es256");
+    let request = SigningRequest {
+        cert_path: &cert,
+        key_path: &key,
+        alg: alg.as_deref().unwrap_or("es256"),
+        manifest_json: manifest_json.as_deref(),
+        intent: intent.as_deref(),
+        ingredient_files_json: ingredient_files.as_deref(),
+    };
 
-    do_sign_file(&source, &dest, &cert, &key, alg_str, manifest_json.as_deref(),
-                 intent.as_deref(), ingredient_files.as_deref())
-        .map_err(|e| Error::new(Ruby::get().expect("called from Ruby thread").exception_runtime_error(), e.to_string()))?;
-
+    do_sign_file(&source, &dest, &request).map_err(runtime_error)?;
     Ok(dest)
 }
 
+// Takes an RString rather than a String so the bytes arrive untouched: a
+// String argument would be transcoded to UTF-8, which is wrong for a JPEG.
+// The slice is copied out at once, since Ruby may move or free the backing
+// store the moment control returns to it.
+fn sign_buffer(
+    ruby: &Ruby,
+    data: RString,
+    format: String,
+    cert: String,
+    key: String,
+    alg: Option<String>,
+    manifest_json: Option<String>,
+    intent: Option<String>,
+    ingredient_files: Option<String>,
+) -> Result<RString, Error> {
+    let bytes = unsafe { data.as_slice() }.to_vec();
+    let request = SigningRequest {
+        cert_path: &cert,
+        key_path: &key,
+        alg: alg.as_deref().unwrap_or("es256"),
+        manifest_json: manifest_json.as_deref(),
+        intent: intent.as_deref(),
+        ingredient_files_json: ingredient_files.as_deref(),
+    };
+
+    let signed = do_sign_buffer(&bytes, &format, &request).map_err(runtime_error)?;
+    Ok(ruby.str_from_slice(&signed))
+}
+
 fn read_file(path: String) -> Result<String, Error> {
-    do_read_file(&path)
-        .map_err(|e| Error::new(Ruby::get().expect("called from Ruby thread").exception_runtime_error(), e.to_string()))
+    do_read_file(&path).map_err(runtime_error)
+}
+
+// c2pa-rs sniffs the container from the leading bytes and lets the hint win
+// only when it agrees; the hint carries the decision alone when sniffing
+// fails, as it does for SVG.
+fn read_buffer(data: RString, format: Option<String>) -> Result<String, Error> {
+    let bytes = unsafe { data.as_slice() }.to_vec();
+    let format = format.as_deref().unwrap_or("application/octet-stream");
+    do_read_buffer(&bytes, format).map_err(runtime_error)
 }
 
 fn configure(settings_json: String) -> Result<(), Error> {
-    do_configure(&settings_json).map_err(|e| {
-        Error::new(
-            Ruby::get().expect("called from Ruby thread").exception_runtime_error(),
-            e.to_string(),
-        )
-    })
+    do_configure(&settings_json).map_err(runtime_error)
 }
 
 fn sdk_version() -> String {
@@ -227,7 +309,9 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     let native = c2pa.define_module("Native")?;
 
     native.define_singleton_method("sign_file", function!(sign_file, 8))?;
+    native.define_singleton_method("sign_buffer", function!(sign_buffer, 8))?;
     native.define_singleton_method("read_file", function!(read_file, 1))?;
+    native.define_singleton_method("read_buffer", function!(read_buffer, 2))?;
     native.define_singleton_method("configure", function!(configure, 1))?;
     native.define_singleton_method("sdk_version", function!(sdk_version, 0))?;
 

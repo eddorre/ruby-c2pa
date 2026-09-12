@@ -809,6 +809,249 @@ class C2PATest < Minitest::Test
     FileUtils.remove_entry(dir) if dir && File.exist?(dir)
   end
 
+  # ─── Buffer signing ────────────────────────────────────────────────────────
+  #
+  # The same operations over bytes in memory, for data that never touches the
+  # filesystem: an upload held in a request body, a generated image, an object
+  # fetched from storage. The native layer wraps the bytes in a Cursor and
+  # hands them to the same c2pa-rs Builder the file path uses.
+  #
+  # The format must be given because there is no filename. c2pa-rs also sniffs
+  # the leading bytes, so a format that contradicts them is an error rather
+  # than a silent mislabel.
+
+  BUFFER_FORMATS = {
+    "tiny.jpg"  => "image/jpeg",
+    "tiny.png"  => "image/png",
+    "tiny.webp" => "image/webp",
+    "tiny.tiff" => "image/tiff",
+    "tiny.avif" => "image/avif",
+    "tiny.jxl"  => "image/jxl",
+    "tiny.wav"  => "audio/wav",
+    "tiny.mp3"  => "audio/mpeg",
+    "tiny.mp4"  => "video/mp4",
+    "tiny.mov"  => "video/quicktime"
+  }.freeze
+
+  def fixture_bytes(name)
+    File.binread(File.join(FIXTURES, name))
+  end
+
+  def sign_bytes(data, format, manifest = created_manifest, **options)
+    assert_certificates_present
+    C2PA.sign_buffer(data: data, format: format, certificate: CERT, key: KEY,
+                     manifest: manifest, **options)
+  end
+
+  def active_manifest(result)
+    result["manifests"].fetch(result["active_manifest"])
+  end
+
+  # The buffer matrix mirrors the file matrix, so a format the file path can
+  # sign but the buffer path cannot shows up as its own failure.
+  def test_buffer_formats_cover_every_signable_format
+    assert_equal SIGNABLE_FORMATS.keys.sort, BUFFER_FORMATS.keys.sort
+  end
+
+  BUFFER_FORMATS.each do |fixture, format|
+    define_method("test_signs_#{fixture.tr('.', '_')}_from_a_buffer") do
+      title = "#{format} from memory"
+      signed = sign_bytes(fixture_bytes(fixture), format, created_manifest(title: title))
+
+      assert_equal Encoding::BINARY, signed.encoding
+      assert_operator signed.bytesize, :>, fixture_bytes(fixture).bytesize,
+                      "#{format}: signed output is no larger than the input, so nothing was embedded"
+
+      result = C2PA.read_buffer(data: signed)
+      assert_includes C2PA::VALID_STATES, result["validation_state"],
+                      "#{format} signed from a buffer but does not validate"
+      assert_equal title, active_manifest(result)["title"]
+
+      # The bytes must be a real asset, not something only read_buffer can
+      # interpret. Writing them out and reading through the file path proves
+      # the two paths produce the same container.
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "from-buffer#{File.extname(fixture)}")
+        File.binwrite(path, signed)
+        from_file = C2PA.read(file: path)
+        assert_includes C2PA::VALID_STATES, from_file["validation_state"]
+        assert_equal title, active_manifest(from_file)["title"],
+                     "#{format}: file path reads a different manifest from the same bytes"
+      end
+    end
+  end
+
+  def test_read_buffer_reads_what_the_file_path_signed
+    read_back(created_manifest(title: "signed to disk")) do |_, from_file|
+      sign_fixture("tiny.jpg", created_manifest(title: "signed to disk")) do |output|
+        from_buffer = C2PA.read_buffer(data: File.binread(output))
+        assert_equal active_manifest(from_file)["title"], active_manifest(from_buffer)["title"]
+        assert_equal from_file["validation_state"], from_buffer["validation_state"]
+      end
+    end
+  end
+
+  # c2pa-rs identifies the container from the leading bytes for every format
+  # in the matrix above, and a hint that disagrees with those bytes is ignored.
+  # The hint does real work only for a format with no signature to sniff. SVG
+  # is one: the bytes are text, so without the hint c2pa-rs has nothing to go
+  # on and reports the type as unsupported.
+  def test_read_buffer_uses_the_format_hint_when_the_bytes_cannot_be_sniffed
+    svg = <<~SVG.b
+      <?xml version="1.0" encoding="UTF-8"?>
+      <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>
+    SVG
+    signed = sign_bytes(svg, "image/svg+xml")
+
+    error = assert_raises(C2PA::ReadError) { C2PA.read_buffer(data: signed) }
+    assert_match(/unsupported/, error.message)
+
+    result = C2PA.read_buffer(data: signed, format: "image/svg+xml")
+    assert_includes C2PA::VALID_STATES, result["validation_state"]
+  end
+
+  def test_read_buffer_ignores_a_format_hint_the_bytes_contradict
+    signed = sign_bytes(fixture_bytes("tiny.png"), "image/png")
+    result = C2PA.read_buffer(data: signed, format: "image/jpeg")
+    assert_includes C2PA::VALID_STATES, result["validation_state"],
+                    "c2pa-rs should trust the PNG signature over the hint"
+  end
+
+  # A JPEG loaded with File.read instead of File.binread arrives tagged UTF-8.
+  # Transcoding it would corrupt the asset, and the corruption is silent until
+  # a verifier rejects the result, so the tag is rejected up front. The bytes
+  # are exactly the fixture's; only the encoding label differs.
+  def test_sign_buffer_rejects_a_utf8_tagged_string
+    tagged = fixture_bytes("tiny.jpg").force_encoding(Encoding::UTF_8)
+
+    error = assert_raises(ArgumentError) { sign_bytes(tagged, "image/jpeg") }
+    assert_match(/binary string/, error.message)
+    assert_match(/UTF-8/, error.message, "the message should name the encoding it got")
+    assert_match(/binread|\.b\b/, error.message, "the message should say how to fix it")
+  end
+
+  def test_read_buffer_rejects_a_utf8_tagged_string
+    signed = sign_bytes(fixture_bytes("tiny.jpg"), "image/jpeg")
+    tagged = signed.dup.force_encoding(Encoding::UTF_8)
+
+    assert_raises(ArgumentError) { C2PA.read_buffer(data: tagged) }
+    # The same bytes, correctly tagged, still read.
+    assert_includes C2PA::VALID_STATES, C2PA.read_buffer(data: signed)["validation_state"]
+  end
+
+  def test_sign_buffer_rejects_a_non_string
+    error = assert_raises(ArgumentError) { sign_bytes(nil, "image/jpeg") }
+    assert_match(/NilClass/, error.message)
+  end
+
+  def test_sign_buffer_leaves_the_input_alone
+    original = fixture_bytes("tiny.jpg")
+    copy = original.dup
+
+    signed = sign_bytes(original, "image/jpeg")
+
+    assert_equal copy, original, "the input buffer was modified in place"
+    refute_same original, signed
+  end
+
+  def test_sign_buffer_accepts_a_frozen_string
+    signed = sign_bytes(fixture_bytes("tiny.jpg").freeze, "image/jpeg")
+    assert_includes C2PA::VALID_STATES, C2PA.read_buffer(data: signed)["validation_state"]
+  end
+
+  def test_sign_buffer_rejects_a_format_that_contradicts_the_bytes
+    error = assert_raises(C2PA::SigningError) { sign_bytes(fixture_bytes("tiny.jpg"), "image/png") }
+    assert_match(/PNG/, error.message, "c2pa-rs should have tried to parse it as the stated format")
+  end
+
+  def test_sign_buffer_rejects_an_unknown_format
+    error = assert_raises(C2PA::SigningError) { sign_bytes(fixture_bytes("tiny.jpg"), "application/x-nonsense") }
+    assert_match(/unsupported/, error.message)
+  end
+
+  def test_sign_buffer_rejects_empty_data
+    assert_raises(C2PA::SigningError) { sign_bytes("".b, "image/jpeg") }
+  end
+
+  def test_read_buffer_raises_on_unsigned_data
+    error = assert_raises(C2PA::ReadError) { C2PA.read_buffer(data: fixture_bytes("tiny.jpg")) }
+    assert_match(/no JUMBF data/i, error.message)
+  end
+
+  def test_sign_buffer_raises_on_missing_certificate
+    error = assert_raises(C2PA::SigningError) do
+      C2PA.sign_buffer(data: fixture_bytes("tiny.jpg"), format: "image/jpeg",
+                       certificate: "/nonexistent.pem", key: KEY, manifest: created_manifest)
+    end
+    assert_match(/Certificate file not found/, error.message)
+  end
+
+  # The verify-after-sign guard applies here too. There is no file to delete,
+  # so the rejected bytes are simply never returned.
+  def test_signing_an_invalid_manifest_to_a_buffer_raises
+    error = assert_raises(C2PA::SigningError) do
+      sign_bytes(fixture_bytes("tiny.jpg"), "image/jpeg", unchecked_invalid_manifest)
+    end
+
+    assert_match(/failed verification/, error.message)
+    assert_match(/assertion\.action\.ingredientMismatch/, error.message,
+                 "the failure codes should be named, not just the state")
+  end
+
+  def test_verify_false_returns_the_invalid_buffer_for_inspection
+    signed = sign_bytes(fixture_bytes("tiny.jpg"), "image/jpeg", unchecked_invalid_manifest,
+                        verify: false)
+
+    assert_equal "Invalid", C2PA.read_buffer(data: signed)["validation_state"]
+  end
+
+  def test_sign_buffer_honours_the_algorithm
+    assert_certificates_present
+    cert, key = certificate_for("es384")
+    signed = C2PA.sign_buffer(data: fixture_bytes("tiny.jpg"), format: "image/jpeg",
+                              certificate: cert, key: key,
+                              algorithm: "es384", manifest: created_manifest)
+    result = C2PA.read_buffer(data: signed)
+    assert_equal "Es384", active_manifest(result).dig("signature_info", "alg")
+  end
+
+  def test_sign_buffer_embeds_a_signed_ingredient
+    Dir.mktmpdir do |dir|
+      source = signed_source(dir)
+      manifest = C2PA::Manifest.new(title: "derived in memory")
+                               .add_action(C2PA::Actions::CREATED, digital_source_type: DIGITAL_CAPTURE)
+                               .add_ingredient(title: "source.jpg", format: "image/jpeg",
+                                               instance_id: "xmp:iid:source", file: source)
+      signed = sign_bytes(fixture_bytes("tiny.jpg"), "image/jpeg", manifest)
+      ingredient = Array(active_manifest(C2PA.read_buffer(data: signed))["ingredients"]).first
+
+      refute_nil ingredient
+      refute_nil ingredient["active_manifest"], "the ingredient's own manifest was not carried across"
+    end
+  end
+
+  def test_signing_buffers_concurrently_produces_correct_results
+    assert_certificates_present
+    data = fixture_bytes("tiny.jpg")
+
+    results = 8.times.map do |i|
+      Thread.new do
+        manifest = C2PA::Manifest.new(title: "buffer thread #{i}")
+                                 .add_action(C2PA::Actions::CREATED,
+                                             digital_source_type: DIGITAL_CAPTURE)
+        signed = C2PA.sign_buffer(data: data, format: "image/jpeg",
+                                  certificate: CERT, key: KEY, manifest: manifest)
+        result = C2PA.read_buffer(data: signed)
+        [result["validation_state"], active_manifest(result)["title"]]
+      end
+    end.map(&:value)
+
+    states, titles = results.transpose
+    states.each { |state| assert_includes C2PA::VALID_STATES, state }
+    assert_equal (0...8).map { |i| "buffer thread #{i}" }.sort, titles.sort,
+                 "titles were mixed between threads"
+  end
+
   # ─── Packaging ─────────────────────────────────────────────────────────────
   #
   # 0.2.1 shipped 1.3 MB of Rust build-script output, because "ext/**/*.rs"
