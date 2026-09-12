@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-11
+
+Adds capability on top of 0.3.0. Nothing is removed and no existing call
+changes behaviour, so this is a minor release.
+
+### Added
+
+- Provenance chaining through ingredients. `add_ingredient` takes an optional
+  `file:`. When the file carries content credentials, its manifest is embedded
+  in the signed output and the ingredient points at it, so a verifier can follow
+  the chain from your asset back through the original. The description-only
+  form is unchanged.
+- `intent: :update` on `C2PA::Manifest`, for non-editorial changes such as
+  correcting metadata. The source file is the parent.
+- `C2PA.configure`, for trust and verification settings. Add a private CA's
+  root as a trust anchor and its certificates validate as `Trusted`; disable
+  `remote_manifest_fetch` and `ocsp_fetch` for environments without network
+  access. Only values you set are sent, so defaults are c2pa-rs's own.
+- Reading content credentials from PDFs. `C2PA.read` now parses a PDF and
+  returns its manifest if one is present. Signing a PDF remains impossible;
+  c2pa-rs has no PDF writer and upstream closed the request to add one.
+- `C2PA::InvalidSettingsError`, raised by `C2PA.configure` for unusable input.
+
+### Changed
+
+- c2pa-rs 0.90.15 → 0.90.22. The range includes security fixes: `h2` updated
+  for RUSTSEC-2026-0258, `chacha20` moved off a yanked version, hardening of
+  BMFF chunk-index handling and CAWG identity bindings. The lockfile ships in
+  the gem, so installers get these once they upgrade.
+- The native layer uses c2pa-rs's Context API rather than the deprecated
+  `Builder::from_json` and `Reader::from_file`, which read settings from
+  thread-local state. One shared Context is reused across calls. Signing from
+  several threads concurrently is now tested.
+- CI fails if a deprecated c2pa-rs API reappears.
+
+### Documentation
+
+- The certificate section no longer claims certificates must chain to a CA in
+  the C2PA trust list, or that self-signed certificates are rejected as such.
+  A private CA works; its certificates carry `signingCredential.untrusted`
+  until the root is added as an anchor. The certificate profile c2pa-rs
+  enforces is listed, including the Authority Key Identifier that
+  `openssl x509 -req` omits by default.
+- PDF is listed as read-only, with a note on what the test suite can and
+  cannot show: nothing available can produce a C2PA-signed PDF, so reading one
+  is untested here, though the code doing it is c2pa-rs's own.
+
 ## [0.3.0] — 2026-08-25
 
 Runs on c2pa-rs 0.90, and fixes every defect found while building a test suite
@@ -99,7 +146,8 @@ Tagged retroactively. See the v0.2.1 tag for the defects it shipped with.
 
 Tagged retroactively.
 
-[Unreleased]: https://github.com/eddorre/ruby-c2pa/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/eddorre/ruby-c2pa/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/eddorre/ruby-c2pa/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/eddorre/ruby-c2pa/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/eddorre/ruby-c2pa/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/eddorre/ruby-c2pa/releases/tag/v0.2.0
