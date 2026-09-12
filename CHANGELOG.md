@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-09-12
+
+Adds capability on top of 0.4.0. Nothing is removed and no existing call
+changes behaviour, so this is a minor release. The one change every caller
+will feel is that native calls no longer hold the GVL, which only makes other
+threads faster.
+
 ### Added
 
 - Buffer signing. `C2PA.sign_buffer(data:, format:, ...)` signs bytes held in
@@ -176,7 +183,8 @@ Tagged retroactively. See the v0.2.1 tag for the defects it shipped with.
 
 Tagged retroactively.
 
-[Unreleased]: https://github.com/eddorre/ruby-c2pa/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/eddorre/ruby-c2pa/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/eddorre/ruby-c2pa/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/eddorre/ruby-c2pa/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/eddorre/ruby-c2pa/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/eddorre/ruby-c2pa/compare/v0.2.0...v0.2.1

@@ -405,7 +405,7 @@ The signed manifest then reads:
   "name": "Acme Editor",
   "version": "2.0",
   "org.contentauth.c2pa_rs": "0.90.22",
-  "org.rubygems.ruby_c2pa": "0.4.0"
+  "org.rubygems.ruby_c2pa": "0.5.0"
 }
 ```
 
