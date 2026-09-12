@@ -1,3 +1,4 @@
+use std::fs::File;
 use std::path::Path;
 use std::sync::{Arc, RwLock, OnceLock};
 use c2pa::{create_signer, Builder, BuilderIntent, Context, Reader, SigningAlg};
@@ -80,6 +81,41 @@ fn intent_from_str(intent: &str) -> Result<BuilderIntent, String> {
     }
 }
 
+// Ingredients supplied as files rather than as descriptions. c2pa-rs reads the
+// bytes to hash them, generate a thumbnail, and carry forward any manifest the
+// file already holds; the JSON description takes precedence over anything
+// derived from the stream.
+//
+// Expects a JSON array of {"json": "<ingredient JSON>", "format": "<mime>",
+// "path": "<file>"}.
+fn add_ingredient_files(
+    builder: &mut Builder,
+    ingredient_files_json: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let entries: serde_json::Value = serde_json::from_str(ingredient_files_json)
+        .map_err(|e| format!("Invalid ingredient list: {}", e))?;
+    let entries = entries
+        .as_array()
+        .ok_or("Invalid ingredient list: expected an array")?;
+
+    for entry in entries {
+        let field = |name: &str| -> Result<&str, String> {
+            entry[name]
+                .as_str()
+                .ok_or_else(|| format!("Invalid ingredient list: missing '{}'", name))
+        };
+        let (json, format, path) = (field("json")?, field("format")?, field("path")?);
+
+        let mut stream = File::open(path)
+            .map_err(|e| format!("Cannot read ingredient '{}': {}", path, e))?;
+        builder
+            .add_ingredient_from_stream(json, format, &mut stream)
+            .map_err(|e| format!("Cannot add ingredient '{}': {}", path, e))?;
+    }
+
+    Ok(())
+}
+
 fn do_sign_file(
     source_path: &str,
     dest_path: &str,
@@ -88,6 +124,7 @@ fn do_sign_file(
     alg_str: &str,
     manifest_json: Option<&str>,
     intent_str: Option<&str>,
+    ingredient_files_json: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let cert = std::fs::read(cert_path)
         .map_err(|e| format!("Cannot read certificate '{}': {}", cert_path, e))?;
@@ -114,6 +151,10 @@ fn do_sign_file(
         builder.set_intent(intent_from_str(intent)?);
     }
 
+    if let Some(files) = ingredient_files_json {
+        add_ingredient_files(&mut builder, files)?;
+    }
+
     builder.sign_file(&*signer, source_path, dest_path)
         .map_err(|e| format!("Signing failed: {}", e))?;
 
@@ -137,10 +178,12 @@ fn sign_file(
     alg: Option<String>,
     manifest_json: Option<String>,
     intent: Option<String>,
+    ingredient_files: Option<String>,
 ) -> Result<String, Error> {
     let alg_str = alg.as_deref().unwrap_or("es256");
 
-    do_sign_file(&source, &dest, &cert, &key, alg_str, manifest_json.as_deref(), intent.as_deref())
+    do_sign_file(&source, &dest, &cert, &key, alg_str, manifest_json.as_deref(),
+                 intent.as_deref(), ingredient_files.as_deref())
         .map_err(|e| Error::new(Ruby::get().expect("called from Ruby thread").exception_runtime_error(), e.to_string()))?;
 
     Ok(dest)
@@ -171,7 +214,7 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     let c2pa = ruby.define_module("C2PA")?;
     let native = c2pa.define_module("Native")?;
 
-    native.define_singleton_method("sign_file", function!(sign_file, 7))?;
+    native.define_singleton_method("sign_file", function!(sign_file, 8))?;
     native.define_singleton_method("read_file", function!(read_file, 1))?;
     native.define_singleton_method("configure", function!(configure, 1))?;
     native.define_singleton_method("sdk_version", function!(sdk_version, 0))?;

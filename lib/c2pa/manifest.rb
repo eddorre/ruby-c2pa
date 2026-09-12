@@ -4,17 +4,15 @@ module C2PA
   class Manifest
     # Intents this gem can express.
     #
-    # :edit — this asset derives from a parent. c2pa-rs generates the parent
-    #         ingredient from the source file and adds a c2pa.opened action
-    #         wired to it by hashed URI.
+    # :edit   — this asset derives from a parent. c2pa-rs generates the parent
+    #           ingredient from the source file and adds a c2pa.opened action
+    #           wired to it by hashed URI.
+    # :update — a restricted edit for non-editorial changes, such as fixing
+    #           metadata. The parent is the source file itself; an explicit
+    #           ingredient, if given, must be that same file.
     #
     # Omitting the intent produces a manifest for a newly created asset.
-    #
-    # c2pa-rs also has an :update intent, a restricted edit for non-editorial
-    # changes. It is not offered here because it requires an ingredient with
-    # real content, and add_ingredient records metadata only — signing with it
-    # fails with "ingredient file not found". Tracked separately.
-    INTENTS = %i[edit].freeze
+    INTENTS = %i[edit update].freeze
 
     # c2pa-rs records itself in a namespaced field alongside the generator
     # name, so the gem does the same when an application supplies its own.
@@ -43,7 +41,15 @@ module C2PA
       @actions = []
       @assertions = []
       @ingredients = []
+      @ingredient_files = []
     end
+
+    # Ingredients supplied as files, for the signing layer to hand to c2pa-rs.
+    # Each is a Hash with the ingredient's JSON description, its format, and
+    # the path to read.
+    #
+    # @return [Array<Hash>]
+    attr_reader :ingredient_files
 
     # Add a C2PA action to this manifest.
     #
@@ -115,17 +121,47 @@ module C2PA
 
     # Add an ingredient (source asset) to this manifest.
     #
-    # @param title       [String] human-readable title of the ingredient
-    # @param format      [String] MIME type of the ingredient, e.g. "image/jpeg"
-    # @param instance_id [String] unique identifier for the ingredient instance
+    # With `file:`, c2pa-rs reads the ingredient itself. If that file carries
+    # content credentials, its manifest is embedded and the ingredient points
+    # at it, so provenance chains from the original through to this asset. A
+    # verifier can then follow and check the whole history.
+    #
+    # For a file with no credentials there is nothing to carry forward, and
+    # the result is the same as the description alone. (Thumbnails would be
+    # the other contribution, but they need c2pa-rs's `add_thumbnails`
+    # feature, which this gem does not enable.)
+    #
+    # Without `file:`, only the description is recorded. Nothing binds it to
+    # any actual bytes. This form is kept for compatibility.
+    #
+    # @param title        [String] human-readable title of the ingredient
+    # @param format       [String] MIME type of the ingredient, e.g. "image/jpeg"
+    # @param instance_id  [String] unique identifier for the ingredient instance
     # @param relationship [String] relationship to this asset; defaults to "parentOf"
+    # @param file         [String, nil] path to the ingredient file
     # @return [self]
-    def add_ingredient(title:, format:, instance_id:, relationship: "parentOf")
-      @ingredients << {
+    # @raise [C2PA::InvalidManifestError] if `file` is given but cannot be read
+    def add_ingredient(title:, format:, instance_id:, relationship: "parentOf", file: nil)
+      description = {
         "title"        => title,
         "format"       => format,
         "instance_id"  => instance_id,
         "relationship" => relationship
+      }
+
+      if file.nil?
+        @ingredients << description
+        return self
+      end
+
+      unless File.file?(file) && File.readable?(file)
+        raise InvalidManifestError, "ingredient file not readable: #{file.inspect}"
+      end
+
+      @ingredient_files << {
+        "json"   => JSON.generate(description),
+        "format" => format,
+        "path"   => File.expand_path(file)
       }
       self
     end

@@ -439,6 +439,94 @@ class C2PATest < Minitest::Test
     end
   end
 
+  # ─── Ingredients from files ────────────────────────────────────────────────
+  #
+  # add_ingredient used to record a description and nothing else. c2pa-rs
+  # never saw the ingredient's bytes, so an ingredient was a claim about a
+  # file rather than a link to one: nothing to verify, no provenance carried
+  # forward, and the :update intent failed for want of a real ingredient.
+  #
+  # With file:, c2pa-rs reads the ingredient. When it carries content
+  # credentials, its manifest is embedded and the chain continues.
+
+  # A signed asset to use as an ingredient.
+  def signed_source(dir)
+    path = File.join(dir, "source.jpg")
+    C2PA.sign(file: File.join(FIXTURES, "tiny.jpg"), output: path,
+              certificate: CERT, key: KEY,
+              manifest: created_manifest(title: "the original"))
+    path
+  end
+
+  def test_a_signed_ingredient_file_chains_its_provenance
+    assert_certificates_present
+    dir = Dir.mktmpdir
+    source = signed_source(dir)
+
+    manifest = created_manifest(title: "composite").add_ingredient(
+      title: "source", format: "image/jpeg", instance_id: "xmp:iid:source",
+      relationship: "componentOf", file: source
+    )
+    output = File.join(dir, "composite.jpg")
+    C2PA.sign(file: File.join(FIXTURES, "tiny.jpg"), output: output,
+              certificate: CERT, key: KEY, manifest: manifest)
+
+    result = C2PA.read(file: output)
+    assert_equal 2, result["manifests"].size,
+                 "the ingredient's manifest should be embedded alongside the composite's"
+
+    ingredient = result["manifests"].fetch(result["active_manifest"])["ingredients"].first
+    refute_nil ingredient["active_manifest"], "the ingredient should point at its own manifest"
+    assert_equal "the original",
+                 result["manifests"].fetch(ingredient["active_manifest"])["title"],
+                 "the original's manifest should be recoverable from the composite"
+  ensure
+    FileUtils.remove_entry(dir) if dir && File.exist?(dir)
+  end
+
+  # The description-only form records exactly what it always did.
+  def test_an_ingredient_without_a_file_carries_no_manifest
+    assert_certificates_present
+    manifest = created_manifest.add_ingredient(
+      title: "source", format: "image/jpeg", instance_id: "xmp:iid:source",
+      relationship: "componentOf"
+    )
+
+    read_back(manifest) do |active, result|
+      assert_equal 1, result["manifests"].size
+      assert_nil active["ingredients"].first["active_manifest"]
+    end
+  end
+
+  def test_an_unreadable_ingredient_file_raises_before_signing
+    error = assert_raises(C2PA::InvalidManifestError) do
+      created_manifest.add_ingredient(
+        title: "missing", format: "image/jpeg", instance_id: "xmp:iid:x",
+        file: "/nonexistent/source.jpg"
+      )
+    end
+    assert_match(/not readable/, error.message)
+  end
+
+  def test_update_intent_signs_a_non_editorial_change
+    assert_certificates_present
+    dir = Dir.mktmpdir
+    source = signed_source(dir)
+
+    manifest = C2PA::Manifest.new(title: "metadata fix", intent: :update)
+                             .add_action(C2PA::Actions::EDITED_METADATA)
+    output = File.join(dir, "updated.jpg")
+    C2PA.sign(file: source, output: output, certificate: CERT, key: KEY, manifest: manifest)
+
+    result = C2PA.read(file: output)
+    assert_includes C2PA::VALID_STATES, result["validation_state"]
+    assert_equal %w[c2pa.opened c2pa.edited.metadata],
+                 signed_actions(result["manifests"].fetch(result["active_manifest"]))
+                   .map { |action| action["action"] }
+  ensure
+    FileUtils.remove_entry(dir) if dir && File.exist?(dir)
+  end
+
   # ─── Trust configuration ───────────────────────────────────────────────────
   #
   # Before this existed the gem could not reach "Trusted" at all — c2pa-rs
