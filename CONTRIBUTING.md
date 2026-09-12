@@ -75,7 +75,7 @@ test is specific as well as present.
 Mutating the Rust in `ext/c2pa_native/` counts double — it proves the test
 reaches through the FFI boundary rather than stopping at Ruby.
 
-### Two traps, both hit while building this suite
+### Three traps, all hit while building this suite
 
 **A mutation that does not do what you think.** A NUL-handling test appeared to
 survive a mutation that stripped NUL bytes, which would have meant the test was
@@ -88,6 +88,17 @@ source before trusting the result.
 verdict rather than on our own code, mutate in both directions. A harness made
 to report no failures and a harness made to report spurious ones fail different
 tests; checking only one leaves the other half unverified.
+
+**A probe that measures the wrong thing.** The first two designs for the
+GVL tests looked at wall-clock effects: how long a Ruby thread stalled during
+a native call, and how much progress it made. Both reported the lock released
+when it was held, because `C2PA.sign`'s own `File.exist?` checks release the
+lock (stat does) and the wait to get it back swamped everything else. A
+`sample` of the process showed the main thread spending three quarters of its
+time waiting on the lock after a stat, not inside the native call. The test
+that works measures CPU parallelism, which waiting cannot inflate. When a
+timing test passes under the mutation it was written to catch, suspect the
+probe before the code.
 
 ## Where there is no oracle
 

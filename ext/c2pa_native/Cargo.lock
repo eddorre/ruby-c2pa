@@ -472,6 +472,7 @@ version = "0.1.0"
 dependencies = [
  "c2pa",
  "magnus",
+ "rb-sys",
  "serde_json",
 ]
 

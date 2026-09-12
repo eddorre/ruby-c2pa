@@ -14,8 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads them back. Both require a binary string and raise `ArgumentError` for
   any other encoding rather than transcoding the asset. The verify-after-sign
   guard applies to buffers as it does to files. Memory use is about four
-  times the asset, and the call holds the GVL for its duration, as file
-  signing does.
+  times the asset.
+- The native calls (`sign_file`, `sign_buffer`, `read_file`, `read_buffer`)
+  release Ruby's global VM lock while c2pa-rs runs. Other Ruby threads keep
+  running during a sign; previously they were blocked until it returned.
+  Measured alongside a busy Ruby thread, the process now uses about 1.9
+  CPU-seconds per wall-second against 1.0 before. `Thread#kill` and
+  `Timeout` take effect when the native call returns, not during it.
 - Thumbnails. `C2PA.configure` gains `thumbnails`, `thumbnail_size`,
   `thumbnail_format` and `thumbnail_quality`. When enabled, a thumbnail of the
   asset is embedded in its manifest, and of each ingredient supplied as a file.
@@ -25,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- rb-sys is now a direct dependency of the native extension, for
+  `rb_thread_call_without_gvl`, which magnus does not wrap. It resolves to the
+  same copy magnus already uses.
 - The native extension is built with c2pa-rs's `add_thumbnails` feature, which
   adds the `image` crate: 16 more crates, about 17 seconds on a cold compile,
   and 1.5 MB on the compiled extension.
