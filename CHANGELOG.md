@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Built against c2pa-rs 0.91.0. That release validates manifests before
+  writing by default; the gem turns that off and keeps its own
+  verify-after-sign guard, which reads the finished output back and checks
+  its hashes. Errors and the `verify:` option behave as before.
+
 ## [0.5.0] — 2026-09-12
 
 Adds capability on top of 0.4.0. Nothing is removed and no existing call
