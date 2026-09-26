@@ -504,6 +504,18 @@ C2PA.configure do |config|
 end
 ```
 
+When fetches stay on, c2pa-rs follows HTTP redirects but refuses one that
+points at an internal address, such as localhost, a private network or a cloud
+metadata endpoint. The URL can come from the asset being read, so this stops a
+crafted file from reaching your internal services. To refuse redirects
+altogether:
+
+```ruby
+C2PA.configure do |config|
+  config.allow_redirects = false
+end
+```
+
 ### Thumbnails
 
 c2pa-rs can embed a thumbnail of the asset in its manifest, and of each
@@ -536,14 +548,17 @@ without one; c2pa-rs treats that as non-fatal.
 | `verify_trust` | `true` | whether trust is checked at all |
 | `remote_manifest_fetch` | `true` | whether reading may fetch over the network |
 | `ocsp_fetch` | `false` | whether revocation is checked over OCSP |
+| `allow_redirects` | `true` | whether network fetches follow redirects; internal targets are always refused |
 | `thumbnails` | `false` | embed a thumbnail of the asset and of file-backed ingredients |
 | `thumbnail_size` | 1024 | longest edge of the thumbnail, in pixels |
 | `thumbnail_format` | smallest | `:jpeg`, `:png` or `:gif` |
 | `thumbnail_quality` | `:medium` | `:low`, `:medium` or `:high` |
 
 Settings are global and apply to subsequent calls. Only values you set are
-sent, so anything left alone keeps c2pa-rs's own default, with one exception:
-`thumbnails` is always sent, because this gem's default differs from c2pa-rs's.
+sent, so anything left alone keeps c2pa-rs's own default. Two exceptions are
+always sent, because this gem's default differs from c2pa-rs's: `thumbnails`,
+and c2pa-rs's own verify-after-sign check, which the gem turns off in favour of
+its `verify:` guard.
 `C2PA.configure` with no block resets everything.
 
 Turning `verify_trust` off means nothing is ever reported as untrusted, which
