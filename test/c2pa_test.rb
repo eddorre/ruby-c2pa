@@ -1637,6 +1637,17 @@ class C2PATest < Minitest::Test
     end
   end
 
+  # c2pa-rs 0.91 validates relatedAssertions when reading but its builder
+  # cannot create them, so the gem refuses rather than pass a hash it made up.
+  def test_builder_refuses_related_assertions
+    [{ "relatedAssertions" => [] }, { relatedAssertions: [] }].each do |parameters|
+      error = assert_raises(C2PA::InvalidManifestError) do
+        created_manifest.add_action(C2PA::Actions::EDITED, parameters: parameters)
+      end
+      assert_match(/hashed URI/, error.message)
+    end
+  end
+
   def test_unspecified_source_type_is_accepted
     manifest = C2PA::Manifest.new(title: "Test")
                              .add_action(C2PA::Actions::CREATED,

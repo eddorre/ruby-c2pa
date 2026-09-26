@@ -75,6 +75,17 @@ module C2PA
               "intent: :edit to C2PA::Manifest.new instead and the action will be added for you."
       end
 
+      # Same limit as c2pa.opened: each entry is a hashed URI that only c2pa-rs
+      # can compute, and in 0.91 its builder does not compute them, only
+      # checks them when reading. A hand-written hash would pass that check
+      # today while claiming a binding nothing verified.
+      if parameters.is_a?(Hash) && (parameters.key?("relatedAssertions") || parameters.key?(:relatedAssertions))
+        raise InvalidManifestError,
+              "relatedAssertions cannot be set. Each entry must be a hashed URI computed over " \
+              "the assertion as c2pa-rs serialises it, and c2pa-rs #{C2PA.sdk_version} does not " \
+              "compute them when building a manifest, so Ruby cannot produce a genuine one."
+      end
+
       # Required as of c2pa-rs 0.90. Earlier versions accepted its absence, so
       # manifests signed by releases before 0.3.0 are rejected by current
       # verifiers. No default is supplied: c2pa-rs accepts any string here, so

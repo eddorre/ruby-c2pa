@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `Manifest#add_action` raises `C2PA::InvalidManifestError` when
+  `parameters` includes `relatedAssertions`. c2pa-rs 0.91 checks these links
+  when reading but cannot create them, so the gem has no genuine value to
+  send.
 - Built against c2pa-rs 0.91.0. That release validates manifests before
   writing by default; the gem turns that off and keeps its own
   verify-after-sign guard, which reads the finished output back and checks
