@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `Manifest#add_ingredient` takes `digital_source_type:`, recording how an
+  ingredient with no content credentials was produced. Giving one for a file
+  that carries credentials raises `C2PA::InvalidManifestError`.
+
 ### Changed
 
 - Built against c2pa-rs 0.91.0. That release validates manifests before
