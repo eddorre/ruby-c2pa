@@ -19,11 +19,20 @@ use magnus::{function, prelude::*, Error, RString, Ruby};
 //
 // It currently carries defaults. Exposing settings to Ruby is a separate piece
 // of work; this is the seam that makes it possible.
-// The one place this gem departs from c2pa-rs's defaults. c2pa-rs generates
-// thumbnails when the feature is compiled in, scaling to a 1024px long edge —
-// and it upscales, so a 160x120 source gets a 1024x768 "thumbnail" ten times
-// its size. Off unless asked for; Config::to_json always states the choice.
-const DEFAULT_SETTINGS: &str = r#"{"builder":{"thumbnail":{"enabled":false}}}"#;
+// The two places this gem departs from c2pa-rs's defaults; Config::to_json
+// always states both.
+//
+// Thumbnails: c2pa-rs generates them when the feature is compiled in, scaling
+// to a 1024px long edge — and it upscales, so a 160x120 source gets a
+// 1024x768 "thumbnail" ten times its size. Off unless asked for.
+//
+// verify_after_sign: since 0.91 c2pa-rs validates the manifest before writing
+// and refuses an invalid one. The gem's own guard reads the finished output
+// back, which also checks the hashes on the bytes written (upstream's check
+// skips them by default), and honours verify: false for inspecting an invalid
+// file. Running both would read every output twice, so upstream's is off.
+const DEFAULT_SETTINGS: &str =
+    r#"{"builder":{"thumbnail":{"enabled":false}},"verify":{"verify_after_sign":false}}"#;
 
 fn context_slot() -> &'static RwLock<Arc<Context>> {
     static CONTEXT: OnceLock<RwLock<Arc<Context>>> = OnceLock::new();

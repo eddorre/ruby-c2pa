@@ -643,11 +643,12 @@ class C2PATest < Minitest::Test
   end
 
   # Only what the caller sets is sent, so anything untouched keeps c2pa-rs's
-  # default rather than being pinned to ours. The single exception is the
-  # thumbnail switch, where this gem's default deliberately differs, so it is
-  # always stated.
-  def test_an_empty_configuration_sends_only_the_thumbnail_default
-    assert_equal({ "builder" => { "thumbnail" => { "enabled" => false } } },
+  # default rather than being pinned to ours. The exceptions are the thumbnail
+  # switch and verify_after_sign, where this gem's default deliberately
+  # differs, so they are always stated.
+  def test_an_empty_configuration_sends_only_the_gem_defaults
+    assert_equal({ "builder" => { "thumbnail" => { "enabled" => false } },
+                   "verify" => { "verify_after_sign" => false } },
                  JSON.parse(C2PA::Config.new.to_json))
   end
 
@@ -962,7 +963,10 @@ class C2PATest < Minitest::Test
 
   def test_sign_buffer_rejects_a_format_that_contradicts_the_bytes
     error = assert_raises(C2PA::SigningError) { sign_bytes(fixture_bytes("tiny.jpg"), "image/png") }
-    assert_match(/PNG/, error.message, "c2pa-rs should have tried to parse it as the stated format")
+    # c2pa-rs reports the header it expected rather than the format's name:
+    # 89 50 4E 47 is the PNG signature.
+    assert_match(/expected \[89, 50, 4E, 47/, error.message,
+                 "c2pa-rs should have tried to parse it as the stated format")
   end
 
   def test_sign_buffer_rejects_an_unknown_format
@@ -1481,6 +1485,13 @@ class C2PATest < Minitest::Test
     "removed without ingredient parameters" => {
       actions: [CREATED_ACTION, { "action" => "c2pa.removed" }],
       code:    "assertion.action.ingredientMismatch"
+    },
+    # Flagged from c2pa-rs 0.91. Before that the check compared the
+    # actions-assertion index rather than the action index, so a repeated
+    # created inside one assertion slipped through.
+    "created appearing second" => {
+      actions: [CREATED_ACTION, CREATED_ACTION],
+      code:    "assertion.action.malformed"
     }
   }.freeze
 
@@ -1517,15 +1528,6 @@ class C2PATest < Minitest::Test
   # Recorded so that a change upstream surfaces here. Each of these would be a
   # reasonable rule for the gem to enforce anyway; what must not happen is for
   # us to claim the SDK backs us up when it does not.
-
-  # The specification says created must come first, and claim.rs says so in a
-  # comment, but the check compares the actions-assertion index rather than the
-  # action index — so a repeated created inside one assertion is not flagged.
-  def test_created_appearing_second_is_not_flagged_upstream
-    refute_includes failure_codes_for([CREATED_ACTION, CREATED_ACTION]),
-                    "assertion.action.malformed",
-                    "upstream now flags a repeated created; the gem can rely on it"
-  end
 
   # c2pa-rs does not validate action names, which is why C2PA::Actions has no
   # external oracle and its test can only check for duplicates and namespacing.

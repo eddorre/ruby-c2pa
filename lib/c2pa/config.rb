@@ -84,7 +84,9 @@ module C2PA
       trust["trust_anchors"] = read_pem(@trust_list)          unless @trust_list.nil?
       trust["allowed_list"] = read_pem(@allowed_certificates) unless @allowed_certificates.nil?
 
-      verify = {}
+      # verify_after_sign is always sent: C2PA.sign runs its own check on the
+      # finished output, so c2pa-rs's pre-write check stays off.
+      verify = { "verify_after_sign" => false }
       verify["verify_trust"] = @verify_trust                   unless @verify_trust.nil?
       verify["remote_manifest_fetch"] = @remote_manifest_fetch unless @remote_manifest_fetch.nil?
       verify["ocsp_fetch"] = @ocsp_fetch                       unless @ocsp_fetch.nil?
@@ -98,7 +100,7 @@ module C2PA
 
       settings = { "builder" => { "thumbnail" => thumbnail } }
       settings["trust"] = trust unless trust.empty?
-      settings["verify"] = verify unless verify.empty?
+      settings["verify"] = verify
 
       JSON.generate(settings)
     end
