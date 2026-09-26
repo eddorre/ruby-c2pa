@@ -38,6 +38,16 @@ module C2PA
     # network requests.
     attr_accessor :ocsp_fetch
 
+    # Whether network requests made while reading and validating (remote
+    # manifests, OCSP, timestamps) may follow HTTP redirects.
+    #
+    # c2pa-rs defaults this to true but refuses a redirect to an internal
+    # address, such as loopback, a private network or a cloud metadata
+    # endpoint, because the URL can come from untrusted content. false stops
+    # redirects altogether. Neither setting affects a URL that names an
+    # internal host directly.
+    attr_accessor :allow_redirects
+
     # Whether to embed a thumbnail of the asset in its manifest, and of each
     # ingredient supplied as a file.
     #
@@ -66,6 +76,7 @@ module C2PA
       @verify_trust = nil
       @remote_manifest_fetch = nil
       @ocsp_fetch = nil
+      @allow_redirects = nil
       @thumbnails = false
       @thumbnail_size = nil
       @thumbnail_format = nil
@@ -99,6 +110,7 @@ module C2PA
       thumbnail["quality"] = @thumbnail_quality.to_s.downcase unless @thumbnail_quality.nil?
 
       settings = { "builder" => { "thumbnail" => thumbnail } }
+      settings["core"] = { "allow_redirects" => @allow_redirects } unless @allow_redirects.nil?
       settings["trust"] = trust unless trust.empty?
       settings["verify"] = verify
 

@@ -722,6 +722,26 @@ class C2PATest < Minitest::Test
     assert_equal false, settings.dig("verify", "ocsp_fetch")
   end
 
+  def test_redirects_can_be_disabled
+    config = C2PA::Config.new
+    config.allow_redirects = false
+
+    assert_equal false, JSON.parse(config.to_json).dig("core", "allow_redirects")
+  end
+
+  # c2pa-rs has to recognise the key, not merely receive it: a value of the
+  # wrong type is only rejected if the setting exists under that name.
+  def test_allow_redirects_reaches_c2pa_rs
+    C2PA.configure { |config| config.allow_redirects = false }
+
+    error = assert_raises(C2PA::InvalidSettingsError) do
+      C2PA.configure { |config| config.allow_redirects = "no" }
+    end
+    assert_match(/allow_redirects|bool/i, error.message)
+  ensure
+    C2PA.configure
+  end
+
   # ─── Thumbnails ────────────────────────────────────────────────────────────
   #
   # c2pa-rs can embed a thumbnail of the asset, and of each ingredient given

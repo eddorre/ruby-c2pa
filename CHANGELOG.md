@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `C2PA::Config#allow_redirects`. Set it to false to stop network fetches
+  during reading and validation from following redirects. Left unset, c2pa-rs
+  follows redirects but refuses those that point at internal addresses.
 - `Manifest#add_ingredient` takes `digital_source_type:`, recording how an
   ingredient with no content credentials was produced. Giving one for a file
   that carries credentials raises `C2PA::InvalidManifestError`.
