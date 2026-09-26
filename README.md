@@ -256,6 +256,23 @@ Omitting `file:` records the description alone. Nothing binds it to any bytes,
 so a verifier cannot check the claim. That form is kept for compatibility;
 prefer the file.
 
+An ingredient with no credentials can say how it was produced, the same way a
+`c2pa.created` action does for the asset itself:
+
+```ruby
+manifest.add_ingredient(
+  title:               "Generated background",
+  format:              "image/png",
+  instance_id:         "xmp:iid:background-uuid-here",
+  relationship:        "componentOf",
+  file:                "background.png",
+  digital_source_type: C2PA::DigitalSourceTypes::TRAINED_ALGORITHMIC_MEDIA
+)
+```
+
+An ingredient that carries content credentials already records its own origin,
+so `add_ingredient` raises `C2PA::InvalidManifestError` if you give it one.
+
 ### Updating an existing asset
 
 For a non-editorial change to an asset, such as correcting metadata, use

@@ -75,6 +75,17 @@ module C2PA
               "intent: :edit to C2PA::Manifest.new instead and the action will be added for you."
       end
 
+      # Same limit as c2pa.opened: each entry is a hashed URI that only c2pa-rs
+      # can compute, and in 0.91 its builder does not compute them, only
+      # checks them when reading. A hand-written hash would pass that check
+      # today while claiming a binding nothing verified.
+      if parameters.is_a?(Hash) && (parameters.key?("relatedAssertions") || parameters.key?(:relatedAssertions))
+        raise InvalidManifestError,
+              "relatedAssertions cannot be set. Each entry must be a hashed URI computed over " \
+              "the assertion as c2pa-rs serialises it, and c2pa-rs #{C2PA.sdk_version} does not " \
+              "compute them when building a manifest, so Ruby cannot produce a genuine one."
+      end
+
       # Required as of c2pa-rs 0.90. Earlier versions accepted its absence, so
       # manifests signed by releases before 0.3.0 are rejected by current
       # verifiers. No default is supplied: c2pa-rs accepts any string here, so
@@ -139,15 +150,23 @@ module C2PA
     # @param instance_id  [String] unique identifier for the ingredient instance
     # @param relationship [String] relationship to this asset; defaults to "parentOf"
     # @param file         [String, nil] path to the ingredient file
+    # @param digital_source_type [String, nil] URI from the C2PA digitalSourceType
+    #   vocabulary, for an ingredient with no content credentials of its own,
+    #   such as a generated image composited into this asset
     # @return [self]
-    # @raise [C2PA::InvalidManifestError] if `file` is given but cannot be read
-    def add_ingredient(title:, format:, instance_id:, relationship: "parentOf", file: nil)
+    # @raise [C2PA::InvalidManifestError] if `file` is given but cannot be read,
+    #   or if `digital_source_type` is given for a file that carries content
+    #   credentials
+    def add_ingredient(title:, format:, instance_id:, relationship: "parentOf", file: nil,
+                       digital_source_type: nil)
       description = {
         "title"        => title,
         "format"       => format,
         "instance_id"  => instance_id,
         "relationship" => relationship
       }
+      digital_source_type = to_s_or_nil(digital_source_type)
+      description["digital_source_type"] = digital_source_type if digital_source_type
 
       if file.nil?
         @ingredients << description
@@ -156,6 +175,16 @@ module C2PA
 
       unless File.file?(file) && File.readable?(file)
         raise InvalidManifestError, "ingredient file not readable: #{file.inspect}"
+      end
+
+      # The specification forbids a source type alongside an embedded manifest:
+      # an ingredient with credentials already records its own origin. c2pa-rs
+      # refuses the combination only at signing, as "unable to encode assertion
+      # data", so it is caught here where the cause is clear.
+      if digital_source_type && content_credentials?(file)
+        raise InvalidManifestError,
+              "digital_source_type cannot be set for #{file.inspect}: it carries content " \
+              "credentials, which already record where it came from"
       end
 
       @ingredient_files << {
@@ -197,6 +226,14 @@ module C2PA
     end
 
     private
+
+    # A file with no manifest, or one c2pa-rs cannot read, counts as having no
+    # credentials; if it does carry some, signing still fails upstream.
+    def content_credentials?(file)
+      !C2PA.read(file: file)["active_manifest"].nil?
+    rescue ReadError
+      false
+    end
 
     # Parameters may be keyed with strings or symbols depending on the caller.
     def param_present?(parameters, key)

@@ -509,6 +509,66 @@ class C2PATest < Minitest::Test
     assert_match(/not readable/, error.message)
   end
 
+  # ─── Ingredient digital source types ───────────────────────────────────────
+  #
+  # From c2pa-rs 0.91, an ingredient with no credentials of its own can say how
+  # it was produced, as a c2pa.created action does for the asset itself.
+
+  def test_an_ingredient_records_its_digital_source_type
+    assert_certificates_present
+    manifest = created_manifest.add_ingredient(
+      title: "generated", format: "image/jpeg", instance_id: "xmp:iid:generated",
+      relationship: "componentOf",
+      digital_source_type: C2PA::DigitalSourceTypes::TRAINED_ALGORITHMIC_MEDIA
+    )
+
+    read_back(manifest) do |active|
+      assert_equal C2PA::DigitalSourceTypes::TRAINED_ALGORITHMIC_MEDIA,
+                   active["ingredients"].first["digital_source_type"]
+    end
+  end
+
+  def test_a_file_backed_ingredient_without_credentials_records_its_digital_source_type
+    assert_certificates_present
+    manifest = created_manifest.add_ingredient(
+      title: "generated", format: "image/jpeg", instance_id: "xmp:iid:generated",
+      relationship: "componentOf", file: File.join(FIXTURES, "tiny.jpg"),
+      digital_source_type: C2PA::DigitalSourceTypes::TRAINED_ALGORITHMIC_MEDIA
+    )
+
+    read_back(manifest) do |active|
+      assert_equal C2PA::DigitalSourceTypes::TRAINED_ALGORITHMIC_MEDIA,
+                   active["ingredients"].first["digital_source_type"]
+    end
+  end
+
+  # c2pa-rs only refuses this at signing, with "unable to encode assertion
+  # data", which names neither the ingredient nor the field.
+  def test_a_source_type_on_an_ingredient_with_credentials_raises_before_signing
+    assert_certificates_present
+    dir = Dir.mktmpdir
+    source = signed_source(dir)
+
+    error = assert_raises(C2PA::InvalidManifestError) do
+      created_manifest.add_ingredient(
+        title: "source", format: "image/jpeg", instance_id: "xmp:iid:source",
+        relationship: "componentOf", file: source,
+        digital_source_type: C2PA::DigitalSourceTypes::DIGITAL_CAPTURE
+      )
+    end
+    assert_match(/carries content credentials/, error.message)
+  ensure
+    FileUtils.remove_entry(dir) if dir && File.exist?(dir)
+  end
+
+  def test_an_empty_ingredient_source_type_is_left_out
+    manifest = created_manifest.add_ingredient(
+      title: "source", format: "image/jpeg", instance_id: "xmp:iid:source",
+      digital_source_type: ""
+    )
+    refute JSON.parse(manifest.to_json)["ingredients"].first.key?("digital_source_type")
+  end
+
   def test_update_intent_signs_a_non_editorial_change
     assert_certificates_present
     dir = Dir.mktmpdir
@@ -1574,6 +1634,17 @@ class C2PATest < Minitest::Test
   def test_builder_requires_languages_for_translated
     assert_raises(C2PA::InvalidManifestError) do
       created_manifest.add_action(C2PA::Actions::TRANSLATED)
+    end
+  end
+
+  # c2pa-rs 0.91 validates relatedAssertions when reading but its builder
+  # cannot create them, so the gem refuses rather than pass a hash it made up.
+  def test_builder_refuses_related_assertions
+    [{ "relatedAssertions" => [] }, { relatedAssertions: [] }].each do |parameters|
+      error = assert_raises(C2PA::InvalidManifestError) do
+        created_manifest.add_action(C2PA::Actions::EDITED, parameters: parameters)
+      end
+      assert_match(/hashed URI/, error.message)
     end
   end
 
