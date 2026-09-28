@@ -137,10 +137,9 @@ module C2PA
     # at it, so provenance chains from the original through to this asset. A
     # verifier can then follow and check the whole history.
     #
-    # For a file with no credentials there is nothing to carry forward, and
-    # the result is the same as the description alone. (Thumbnails would be
-    # the other contribution, but they need c2pa-rs's `add_thumbnails`
-    # feature, which this gem does not enable.)
+    # For a file with no credentials there is no manifest to carry forward.
+    # The file still contributes a thumbnail when C2PA::Config#thumbnails is
+    # on.
     #
     # Without `file:`, only the description is recorded. Nothing binds it to
     # any actual bytes. This form is kept for compatibility.
