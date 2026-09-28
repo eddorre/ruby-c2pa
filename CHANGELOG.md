@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `C2PA::Config#exclude_free_and_skip_boxes`. Set it to false when signing
+  MP4, MOV and other BMFF files so that any later change to their `free` and
+  `skip` padding boxes breaks the signature. Left unset, c2pa-rs excludes
+  them, as it always has.
 - `C2PA::Config#allow_redirects`. Set it to false to stop network fetches
   during reading and validation from following redirects. Left unset, c2pa-rs
   follows redirects but refuses those that point at internal addresses.

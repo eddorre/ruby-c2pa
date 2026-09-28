@@ -48,6 +48,16 @@ module C2PA
     # internal host directly.
     attr_accessor :allow_redirects
 
+    # Whether signing an MP4, MOV or other BMFF file leaves its /free and /skip
+    # boxes out of the hash. c2pa-rs defaults this to true: those boxes are
+    # padding that tools commonly rewrite after signing, and the specification
+    # allows excluding them. Set false and any later change to them breaks the
+    # signature, like a change to the media itself.
+    #
+    # It affects signing only. The choice is recorded in the signed file, and
+    # readers follow the file whatever their own setting.
+    attr_accessor :exclude_free_and_skip_boxes
+
     # Whether to embed a thumbnail of the asset in its manifest, and of each
     # ingredient supplied as a file.
     #
@@ -77,6 +87,7 @@ module C2PA
       @remote_manifest_fetch = nil
       @ocsp_fetch = nil
       @allow_redirects = nil
+      @exclude_free_and_skip_boxes = nil
       @thumbnails = false
       @thumbnail_size = nil
       @thumbnail_format = nil
@@ -109,7 +120,12 @@ module C2PA
       thumbnail["format"] = @thumbnail_format.to_s.downcase   unless @thumbnail_format.nil?
       thumbnail["quality"] = @thumbnail_quality.to_s.downcase unless @thumbnail_quality.nil?
 
-      settings = { "builder" => { "thumbnail" => thumbnail } }
+      builder = { "thumbnail" => thumbnail }
+      unless @exclude_free_and_skip_boxes.nil?
+        builder["bmff_hash_exclude_free_and_skip_boxes"] = @exclude_free_and_skip_boxes
+      end
+
+      settings = { "builder" => builder }
       settings["core"] = { "allow_redirects" => @allow_redirects } unless @allow_redirects.nil?
       settings["trust"] = trust unless trust.empty?
       settings["verify"] = verify
