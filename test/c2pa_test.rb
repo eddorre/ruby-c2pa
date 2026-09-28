@@ -742,6 +742,101 @@ class C2PATest < Minitest::Test
     C2PA.configure
   end
 
+  # ─── BMFF /free and /skip boxes ────────────────────────────────────────────
+  #
+  # These run against real signed files: sign, rewrite bytes the way a later
+  # tool would, and read. Asserting on the settings JSON alone would pass even
+  # if c2pa-rs ignored the key.
+
+  # tiny.mp4's own free box is empty, so there is no payload to rewrite. One
+  # with 64 bytes of padding is appended after mdat, where it moves no offsets.
+  def padded_mp4(box_type)
+    fixture_bytes("tiny.mp4") + [72, box_type].pack("Na4") + ("\0" * 64)
+  end
+
+  # Top-level boxes as [type, offset, size].
+  def bmff_boxes(data)
+    boxes = []
+    offset = 0
+    while offset + 8 <= data.bytesize
+      size, type = data.byteslice(offset, 8).unpack("Na4")
+      size = data.byteslice(offset + 8, 8).unpack1("Q>") if size == 1
+      size = data.bytesize - offset if size.zero?
+      boxes << [type, offset, size]
+      offset += size
+    end
+    boxes
+  end
+
+  # Sign, then overwrite `length` bytes inside the last box of `box_type` and
+  # return the resulting validation state and failure codes. With
+  # reset_before_read, settings go back to defaults between signing and
+  # reading, as for a reader elsewhere.
+  def sign_and_rewrite(source, box_type, skip: 8, length: 64, reset_before_read: false)
+    dir = Dir.mktmpdir
+    input = File.join(dir, "in.mp4")
+    output = File.join(dir, "out.mp4")
+    File.binwrite(input, source)
+    C2PA.sign(file: input, output: output, certificate: CERT, key: KEY, manifest: created_manifest)
+    C2PA.configure if reset_before_read
+
+    signed = File.binread(output)
+    _, offset, = bmff_boxes(signed).select { |type, _, _| type == box_type }.last
+    signed[offset + skip, length] = "X" * length
+    File.binwrite(output, signed)
+
+    result = C2PA.read(file: output)
+    codes = Array(result.dig("validation_results", "activeManifest", "failure"))
+              .map { |failure| failure["code"] } - ["signingCredential.untrusted"]
+    [result["validation_state"], codes]
+  ensure
+    FileUtils.remove_entry(dir) if dir && File.exist?(dir)
+  end
+
+  def test_rewriting_padding_after_signing_keeps_the_file_valid_by_default
+    assert_certificates_present
+    %w[free skip].each do |box|
+      state, codes = sign_and_rewrite(padded_mp4(box), box)
+      assert_includes C2PA::VALID_STATES, state, "rewriting /#{box} should not break the signature"
+      assert_empty codes
+    end
+  end
+
+  # Control for the test above: the same rewrite applied to the media data
+  # must fail, or a Valid result proves nothing.
+  def test_rewriting_media_data_after_signing_breaks_the_signature
+    assert_certificates_present
+    state, codes = sign_and_rewrite(padded_mp4("free"), "mdat", skip: 100, length: 1)
+    assert_equal "Invalid", state
+    assert_includes codes, "assertion.bmffHash.mismatch"
+  end
+
+  def test_padding_can_be_included_in_the_hash
+    assert_certificates_present
+    C2PA.configure { |config| config.exclude_free_and_skip_boxes = false }
+
+    %w[free skip].each do |box|
+      state, codes = sign_and_rewrite(padded_mp4(box), box)
+      assert_equal "Invalid", state, "rewriting /#{box} should break the signature"
+      assert_includes codes, "assertion.bmffHash.mismatch"
+    end
+  ensure
+    C2PA.configure
+  end
+
+  # The exclusions are written into the file's hash assertion, so a reader with
+  # default settings still holds a strictly signed file to its own terms.
+  def test_a_reader_with_default_settings_honours_the_signers_choice
+    assert_certificates_present
+    C2PA.configure { |config| config.exclude_free_and_skip_boxes = false }
+
+    state, codes = sign_and_rewrite(padded_mp4("free"), "free", reset_before_read: true)
+    assert_equal "Invalid", state
+    assert_includes codes, "assertion.bmffHash.mismatch"
+  ensure
+    C2PA.configure
+  end
+
   # ─── Thumbnails ────────────────────────────────────────────────────────────
   #
   # c2pa-rs can embed a thumbnail of the asset, and of each ingredient given

@@ -538,6 +538,22 @@ images.
 Thumbnails are produced for JPEG, PNG, WebP and TIFF. Other formats sign
 without one; c2pa-rs treats that as non-fatal.
 
+### Padding in MP4 and other BMFF files
+
+MP4, MOV and related formats can hold `free` and `skip` boxes, which are
+padding. Tools often rewrite them after a file is signed, so by default the
+signature leaves them out and those edits don't break it. To make any change
+to the padding break the signature, as a change to the media would:
+
+```ruby
+C2PA.configure do |config|
+  config.exclude_free_and_skip_boxes = false
+end
+```
+
+This only affects signing. The choice is recorded in the signed file, and any
+reader holds the file to it.
+
 ### Everything configurable
 
 | Setting | Default | Purpose |
@@ -549,6 +565,7 @@ without one; c2pa-rs treats that as non-fatal.
 | `remote_manifest_fetch` | `true` | whether reading may fetch over the network |
 | `ocsp_fetch` | `false` | whether revocation is checked over OCSP |
 | `allow_redirects` | `true` | whether network fetches follow redirects; internal targets are always refused |
+| `exclude_free_and_skip_boxes` | `true` | whether BMFF padding boxes are left out of the signature |
 | `thumbnails` | `false` | embed a thumbnail of the asset and of file-backed ingredients |
 | `thumbnail_size` | 1024 | longest edge of the thumbnail, in pixels |
 | `thumbnail_format` | smallest | `:jpeg`, `:png` or `:gif` |
