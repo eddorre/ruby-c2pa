@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::Cursor;
 use std::path::Path;
 use std::sync::{Arc, RwLock, OnceLock};
-use c2pa::{create_signer, Builder, BuilderIntent, Context, Reader, SigningAlg};
+use c2pa::{create_signer, format_from_path, Builder, BuilderIntent, Context, Reader, SigningAlg};
 use magnus::{function, prelude::*, Error, RString, Ruby};
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -198,6 +198,39 @@ fn do_sign_file(source_path: &str, dest_path: &str, request: &SigningRequest) ->
     Ok(())
 }
 
+// Sign without embedding: the asset is hashed as it is, the output carries no
+// manifest, and the manifest store goes to its own file. Hashing the asset
+// unmodified is what makes the pair valid; stripping an embedded manifest out
+// afterwards does not work, because embedding moves offsets elsewhere in the
+// file (chunk offsets in an MP4's moov, for one).
+fn do_sign_file_detached(source_path: &str, dest_path: &str, sidecar_path: &str, request: &SigningRequest)
+    -> Result<(), BoxError> {
+    let signer = build_signer(request.cert_path, request.key_path, request.alg)?;
+
+    let title = Path::new(source_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
+    let mut builder = build_builder(request, title)?;
+    builder.set_no_embed(true);
+
+    let format = format_from_path(source_path)
+        .ok_or_else(|| format!("Signing failed: cannot tell the format of '{}' from its extension", source_path))?;
+    let mut source = File::open(source_path)
+        .map_err(|e| format!("Signing failed: cannot open '{}': {}", source_path, e))?;
+    let mut dest = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(dest_path)
+        .map_err(|e| format!("Signing failed: cannot create '{}': {}", dest_path, e))?;
+
+    let manifest = builder
+        .sign(&*signer, &format, &mut source, &mut dest)
+        .map_err(|e| format!("Signing failed: {}", e))?;
+
+    std::fs::write(sidecar_path, manifest)
+        .map_err(|e| format!("Signing failed: cannot write '{}': {}", sidecar_path, e))?;
+
+    Ok(())
+}
+
 // Sign bytes held in memory. The source is read through a Cursor, and the
 // destination has to be one too: c2pa-rs writes the asset and then seeks back
 // to hash it and patch the manifest in, so a write-only sink will not do.
@@ -226,6 +259,27 @@ fn do_read_file(path: &str) -> Result<String, Box<dyn std::error::Error>> {
         .with_file(path)
         .map_err(|e| format!("Failed to read manifest from '{}': {}", path, e))?;
     Ok(reader.json())
+}
+
+// A manifest store kept apart from its asset, as a .c2pa sidecar or fetched
+// from a remote URL. The store is validated against the asset's bytes; read
+// on its own, a store's hard binding hashes the store itself and never
+// matches.
+fn do_read_detached(manifest: &[u8], format: &str, asset: impl std::io::Read + std::io::Seek + Send)
+    -> Result<String, BoxError> {
+    let reader = Reader::from_shared_context(&shared_context())
+        .with_manifest_data_and_stream(manifest, format, asset)
+        .map_err(|e| format!("Failed to read detached manifest: {}", e))?;
+    Ok(reader.json())
+}
+
+fn do_read_file_with_manifest(path: &str, manifest_path: &str) -> Result<String, BoxError> {
+    let manifest = std::fs::read(manifest_path)
+        .map_err(|e| format!("Failed to read manifest file '{}': {}", manifest_path, e))?;
+    let format = format_from_path(path)
+        .ok_or_else(|| format!("Failed to read '{}': cannot tell its format from the extension", path))?;
+    let asset = File::open(path).map_err(|e| format!("Failed to open '{}': {}", path, e))?;
+    do_read_detached(&manifest, &format, asset)
 }
 
 // ─── Running without the GVL ──────────────────────────────────────────────────
@@ -299,6 +353,7 @@ fn sign_file(
     manifest_json: Option<String>,
     intent: Option<String>,
     ingredient_files: Option<String>,
+    sidecar: Option<String>,
 ) -> Result<String, Error> {
     let request = SigningRequest {
         cert_path: &cert,
@@ -309,7 +364,11 @@ fn sign_file(
         ingredient_files_json: ingredient_files.as_deref(),
     };
 
-    without_gvl(|| do_sign_file(&source, &dest, &request)).map_err(runtime_error)?;
+    without_gvl(|| match &sidecar {
+        Some(sidecar) => do_sign_file_detached(&source, &dest, sidecar, &request),
+        None => do_sign_file(&source, &dest, &request),
+    })
+    .map_err(runtime_error)?;
     Ok(dest)
 }
 
@@ -355,6 +414,18 @@ fn read_buffer(data: RString, format: Option<String>) -> Result<String, Error> {
     without_gvl(|| do_read_buffer(&bytes, format)).map_err(runtime_error)
 }
 
+fn read_file_with_manifest(path: String, manifest_path: String) -> Result<String, Error> {
+    without_gvl(|| do_read_file_with_manifest(&path, &manifest_path)).map_err(runtime_error)
+}
+
+// Unlike read_buffer, nothing is sniffed from the asset here, so the format
+// is required.
+fn read_buffer_with_manifest(data: RString, format: String, manifest: RString) -> Result<String, Error> {
+    let bytes = unsafe { data.as_slice() }.to_vec();
+    let manifest = unsafe { manifest.as_slice() }.to_vec();
+    without_gvl(|| do_read_detached(&manifest, &format, Cursor::new(bytes))).map_err(runtime_error)
+}
+
 fn configure(settings_json: String) -> Result<(), Error> {
     do_configure(&settings_json).map_err(runtime_error)
 }
@@ -370,10 +441,12 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     let c2pa = ruby.define_module("C2PA")?;
     let native = c2pa.define_module("Native")?;
 
-    native.define_singleton_method("sign_file", function!(sign_file, 8))?;
+    native.define_singleton_method("sign_file", function!(sign_file, 9))?;
     native.define_singleton_method("sign_buffer", function!(sign_buffer, 8))?;
     native.define_singleton_method("read_file", function!(read_file, 1))?;
     native.define_singleton_method("read_buffer", function!(read_buffer, 2))?;
+    native.define_singleton_method("read_file_with_manifest", function!(read_file_with_manifest, 2))?;
+    native.define_singleton_method("read_buffer_with_manifest", function!(read_buffer_with_manifest, 3))?;
     native.define_singleton_method("configure", function!(configure, 1))?;
     native.define_singleton_method("sdk_version", function!(sdk_version, 0))?;
 

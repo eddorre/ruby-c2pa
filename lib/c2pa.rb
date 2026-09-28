@@ -58,6 +58,12 @@ module C2PA
   # @param manifest    [C2PA::Manifest]  the manifest to embed
   # @param verify      [Boolean]         read the signed file back and confirm it
   #                                      validates (default: true)
+  # @param sidecar     [String, nil]     write the manifest to this path as a
+  #                                      .c2pa file instead of embedding it (must
+  #                                      not already exist). The output is the
+  #                                      asset as hashed, usually identical to
+  #                                      the input, and is only valid alongside
+  #                                      the sidecar.
   # @return            [String]          the output path
   # @raise [C2PA::SigningError] if signing fails, or if the signed file does not validate
   #
@@ -72,13 +78,17 @@ module C2PA
   #     key:         "key.pem",
   #     manifest:    manifest
   #   )
-  def self.sign(file:, output:, certificate:, key:, algorithm: "es256", manifest:, verify: true)
+  def self.sign(file:, output:, certificate:, key:, algorithm: "es256", manifest:, verify: true, sidecar: nil)
     manifest_json = manifest.to_json
 
     raise SigningError, "Source file not found: '#{file}'"             unless File.exist?(file)
     raise SigningError, "Certificate file not found: '#{certificate}'" unless File.exist?(certificate)
     raise SigningError, "Key file not found: '#{key}'"                 unless File.exist?(key)
     raise SigningError, "Output file already exists: '#{output}'"      if File.exist?(output)
+    raise SigningError, "Sidecar file already exists: '#{sidecar}'"    if sidecar && File.exist?(sidecar)
+    if sidecar && File.expand_path(sidecar) == File.expand_path(output)
+      raise SigningError, "sidecar and output must be different paths"
+    end
 
     begin
       # to_json is the only thing genuinely required of a manifest, so an
@@ -87,12 +97,12 @@ module C2PA
       files = manifest.respond_to?(:ingredient_files) ? manifest.ingredient_files : []
       ingredient_files = files.empty? ? nil : JSON.generate(files)
       Native.sign_file(file, output, certificate, key, algorithm, manifest_json,
-                       intent, ingredient_files)
+                       intent, ingredient_files, sidecar)
     rescue RuntimeError => e
       raise SigningError, e.message
     end
 
-    verify_signed_output!(output) if verify
+    verify_signed_output!(output, sidecar) if verify
 
     output
   end
@@ -156,29 +166,50 @@ module C2PA
   # apart by their bytes: SVG, and the ZIP-based documents (EPUB, DOCX, ODT,
   # OpenXPS), which all begin with the same ZIP header.
   #
-  # @param data   [String]      the asset, as a binary string
-  # @param format [String, nil] MIME type or extension, e.g. "image/svg+xml"
-  # @return       [Hash]        parsed manifest JSON
-  # @raise        [C2PA::ReadError] if the data has no valid manifest
-  def self.read_buffer(data:, format: nil)
+  # With manifest_data, the manifest store is taken from there, as the
+  # contents of a .c2pa sidecar, and validated against data. The format is
+  # then required, since nothing is sniffed.
+  #
+  # @param data          [String]      the asset, as a binary string
+  # @param format        [String, nil] MIME type or extension, e.g. "image/svg+xml"
+  # @param manifest_data [String, nil] a detached manifest store, as a binary string
+  # @return              [Hash]        parsed manifest JSON
+  # @raise               [C2PA::ReadError] if the data has no valid manifest
+  def self.read_buffer(data:, format: nil, manifest_data: nil)
     data = binary!(data, "data")
-    JSON.parse(Native.read_buffer(data, format))
+    return JSON.parse(Native.read_buffer(data, format)) if manifest_data.nil?
+
+    manifest_data = binary!(manifest_data, "manifest_data")
+    raise ArgumentError, "format is required with manifest_data" if format.nil?
+
+    JSON.parse(Native.read_buffer_with_manifest(data, format, manifest_data))
   rescue RuntimeError => e
     raise ReadError, e.message
   end
 
   # Read the C2PA manifest embedded in a signed file.
   #
-  # @param file [String] path to the signed file
-  # @return     [Hash]   parsed manifest JSON
-  # @raise      [C2PA::ReadError] if the file has no valid manifest
+  # A file with no embedded manifest is read against a sidecar beside it with
+  # the same name and a .c2pa extension, if there is one: photo.c2pa for
+  # photo.jpg. Pass manifest_file for a sidecar kept anywhere else.
+  #
+  # Reading a .c2pa file on its own returns the manifest, but with nothing to
+  # check it against its hash never matches and the state is Invalid.
+  #
+  # @param file          [String]      path to the signed file
+  # @param manifest_file [String, nil] path to a detached manifest (.c2pa)
+  #                                    to validate the file against
+  # @return              [Hash]        parsed manifest JSON
+  # @raise               [C2PA::ReadError] if the file has no valid manifest
   #
   # @example
   #   manifest = C2PA.read(file: "photo_signed.jpg")
   #   active = manifest["manifests"][manifest["active_manifest"]]
   #   puts active["title"]
-  def self.read(file:)
-    JSON.parse(Native.read_file(file))
+  def self.read(file:, manifest_file: nil)
+    return JSON.parse(Native.read_file(file)) if manifest_file.nil?
+
+    JSON.parse(Native.read_file_with_manifest(file, manifest_file))
   rescue RuntimeError => e
     raise ReadError, e.message
   end
@@ -202,12 +233,13 @@ module C2PA
   #
   # @param output [String] path to the signed file
   # @raise [C2PA::SigningError] if the file does not validate
-  def self.verify_signed_output!(output)
+  def self.verify_signed_output!(output, sidecar = nil)
     result =
       begin
-        read(file: output)
+        read(file: output, manifest_file: sidecar)
       rescue ReadError => e
         discard(output)
+        discard(sidecar) if sidecar
         raise SigningError, "signed file failed verification: could not read it back: #{e.message}"
       end
 
@@ -219,6 +251,7 @@ module C2PA
     detail = failures.empty? ? "no failure detail reported" : failures.uniq.join(", ")
 
     discard(output)
+    discard(sidecar) if sidecar
     raise SigningError,
           "signed file failed verification: validation_state=#{state.inspect}, #{detail}. " \
           "The output file has been removed. Pass verify: false to keep it for inspection."
