@@ -369,6 +369,209 @@ class C2PATest < Minitest::Test
     assert_raises(C2PA::ReadError) { C2PA.read_buffer(data: signed) }
   end
 
+  # ─── Detached manifests (.c2pa sidecars) ───────────────────────────────────
+  #
+  # With sidecar:, the asset is hashed as it is and the manifest store is
+  # written to its own file. Each test signs a real pair and reads it back;
+  # the tampering and wrong-asset cases are what show the sidecar is bound to
+  # the asset rather than read on trust.
+
+  def failure_codes(result)
+    Array(result.dig("validation_results", "activeManifest", "failure"))
+      .map { |failure| failure["code"] } - ["signingCredential.untrusted"]
+  end
+
+  # Signs fixture with a sidecar in a temporary directory and yields the
+  # output and sidecar paths.
+  def sign_detached(fixture, output_name: "signed#{File.extname(fixture)}", sidecar_name: "manifest.c2pa")
+    assert_certificates_present
+    dir = Dir.mktmpdir
+    output = File.join(dir, output_name)
+    sidecar = File.join(dir, sidecar_name)
+    C2PA.sign(file: File.join(FIXTURES, fixture), output: output, certificate: CERT, key: KEY,
+              manifest: created_manifest(title: "detached"), sidecar: sidecar)
+    yield output, sidecar
+  ensure
+    FileUtils.remove_entry(dir) if dir && File.exist?(dir)
+  end
+
+  %w[tiny.jpg tiny.png tiny.mp4 tiny.wav].each do |fixture|
+    define_method("test_#{fixture.tr('.', '_')}_signs_with_a_sidecar") do
+      sign_detached(fixture) do |output, sidecar|
+        assert_equal fixture_bytes(fixture), File.binread(output),
+                     "the output should be the asset exactly as hashed, with nothing embedded"
+        assert_raises(C2PA::ReadError, "the output should carry no manifest of its own") do
+          C2PA.read(file: output)
+        end
+
+        result = C2PA.read(file: output, manifest_file: sidecar)
+        assert_includes C2PA::VALID_STATES, result["validation_state"]
+        assert_equal "detached", active_manifest(result)["title"]
+      end
+    end
+  end
+
+  def test_changing_the_asset_breaks_its_sidecar
+    sign_detached("tiny.jpg") do |output, sidecar|
+      data = File.binread(output)
+      data.setbyte(data.bytesize / 2, data.getbyte(data.bytesize / 2) ^ 0x01)
+      File.binwrite(output, data)
+
+      result = C2PA.read(file: output, manifest_file: sidecar)
+      assert_equal "Invalid", result["validation_state"]
+      assert_includes failure_codes(result), "assertion.dataHash.mismatch"
+    end
+  end
+
+  def test_a_sidecar_does_not_validate_a_different_asset
+    sign_detached("tiny.jpg") do |_, sidecar|
+      result = C2PA.read(file: File.join(FIXTURES, "tiny.png"), manifest_file: sidecar)
+      assert_equal "Invalid", result["validation_state"]
+      assert_includes failure_codes(result), "assertion.dataHash.mismatch"
+    end
+  end
+
+  def test_an_mp4_sidecar_is_bound_to_the_media
+    sign_detached("tiny.mp4") do |output, sidecar|
+      data = File.binread(output)
+      _, mdat, = bmff_boxes(data).find { |type, _, _| type == "mdat" }
+      data.setbyte(mdat + 100, data.getbyte(mdat + 100) ^ 0x01)
+      File.binwrite(output, data)
+
+      result = C2PA.read(file: output, manifest_file: sidecar)
+      assert_equal "Invalid", result["validation_state"]
+      assert_includes failure_codes(result), "assertion.bmffHash.mismatch"
+    end
+  end
+
+  # c2pa-rs looks beside an asset with no embedded manifest for the same name
+  # with a .c2pa extension, so a sidecar saved that way needs no argument.
+  def test_a_sidecar_with_the_assets_name_is_found_without_being_named
+    sign_detached("tiny.jpg", output_name: "photo.jpg", sidecar_name: "photo.c2pa") do |output, _|
+      assert_includes C2PA::VALID_STATES, C2PA.read(file: output)["validation_state"]
+    end
+  end
+
+  # Read alone, the store's hash is checked against the .c2pa bytes, which it
+  # was never computed over.
+  def test_a_sidecar_read_on_its_own_returns_the_manifest_but_is_invalid
+    sign_detached("tiny.jpg") do |_, sidecar|
+      result = C2PA.read(file: sidecar)
+      assert_equal "detached", active_manifest(result)["title"]
+      assert_equal "Invalid", result["validation_state"]
+      assert_includes failure_codes(result), "assertion.dataHash.mismatch"
+    end
+  end
+
+  def test_read_buffer_validates_against_a_sidecar
+    sign_detached("tiny.jpg") do |output, sidecar|
+      asset = File.binread(output)
+      manifest = File.binread(sidecar)
+
+      result = C2PA.read_buffer(data: asset, format: "image/jpeg", manifest_data: manifest)
+      assert_includes C2PA::VALID_STATES, result["validation_state"]
+      assert_equal "detached", active_manifest(result)["title"]
+
+      asset.setbyte(asset.bytesize / 2, asset.getbyte(asset.bytesize / 2) ^ 0x01)
+      tampered = C2PA.read_buffer(data: asset, format: "image/jpeg", manifest_data: manifest)
+      assert_equal "Invalid", tampered["validation_state"]
+    end
+  end
+
+  def test_read_buffer_needs_a_format_with_a_sidecar
+    error = assert_raises(ArgumentError) do
+      C2PA.read_buffer(data: fixture_bytes("tiny.jpg"), manifest_data: "x".b)
+    end
+    assert_match(/format is required/, error.message)
+  end
+
+  def test_a_manifest_file_that_is_not_a_manifest_raises
+    Dir.mktmpdir do |dir|
+      bogus = File.join(dir, "bogus.c2pa")
+      File.binwrite(bogus, "not a manifest store")
+      assert_raises(C2PA::ReadError) do
+        C2PA.read(file: File.join(FIXTURES, "tiny.jpg"), manifest_file: bogus)
+      end
+    end
+  end
+
+  def test_signing_refuses_an_existing_sidecar
+    assert_certificates_present
+    Dir.mktmpdir do |dir|
+      sidecar = File.join(dir, "manifest.c2pa")
+      File.write(sidecar, "keep me")
+      error = assert_raises(C2PA::SigningError) do
+        C2PA.sign(file: File.join(FIXTURES, "tiny.jpg"), output: File.join(dir, "out.jpg"),
+                  certificate: CERT, key: KEY, manifest: created_manifest, sidecar: sidecar)
+      end
+      assert_match(/already exists/, error.message)
+      assert_equal "keep me", File.read(sidecar)
+    end
+  end
+
+  def test_signing_refuses_a_sidecar_at_the_output_path
+    assert_certificates_present
+    Dir.mktmpdir do |dir|
+      output = File.join(dir, "out.jpg")
+      assert_raises(C2PA::SigningError) do
+        C2PA.sign(file: File.join(FIXTURES, "tiny.jpg"), output: output,
+                  certificate: CERT, key: KEY, manifest: created_manifest, sidecar: output)
+      end
+      refute File.exist?(output)
+    end
+  end
+
+  # The verify guard applies to the pair: a rejected sign leaves neither file.
+  def test_an_invalid_detached_sign_removes_both_files
+    assert_certificates_present
+    Dir.mktmpdir do |dir|
+      output = File.join(dir, "out.jpg")
+      sidecar = File.join(dir, "out.c2pa")
+      error = assert_raises(C2PA::SigningError) do
+        C2PA.sign(file: File.join(FIXTURES, "tiny.jpg"), output: output, certificate: CERT, key: KEY,
+                  manifest: unchecked_invalid_manifest, sidecar: sidecar)
+      end
+      assert_match(/failed verification/, error.message)
+      refute File.exist?(output), "the output should be removed"
+      refute File.exist?(sidecar), "the sidecar should be removed"
+    end
+  end
+
+  def test_verify_false_keeps_an_invalid_detached_pair
+    assert_certificates_present
+    Dir.mktmpdir do |dir|
+      output = File.join(dir, "out.jpg")
+      sidecar = File.join(dir, "elsewhere.c2pa")
+      C2PA.sign(file: File.join(FIXTURES, "tiny.jpg"), output: output, certificate: CERT, key: KEY,
+                manifest: unchecked_invalid_manifest, sidecar: sidecar, verify: false)
+      assert_equal "Invalid", C2PA.read(file: output, manifest_file: sidecar)["validation_state"]
+    end
+  end
+
+  # ─── c2md manifests ────────────────────────────────────────────────────────
+  #
+  # The specification lets a standard manifest use the c2md JUMBF type as well
+  # as c2ma. Generators must not write it, but readers must accept it; before
+  # c2pa-rs 0.91 such a manifest was skipped as unknown. The type UUID sits in
+  # the manifest box's description, outside the claim signature and outside
+  # the asset hash, so retagging a signed file tests the reader alone.
+  C2MA_UUID = ["63326D6100110010800000AA00389B71"].pack("H*").freeze
+  C2MD_UUID = ["63326D6400110010800000AA00389B71"].pack("H*").freeze
+
+  %w[tiny.jpg tiny.png].each do |fixture|
+    define_method("test_a_c2md_manifest_in_#{fixture.tr('.', '_')}_is_read") do
+      sign_fixture(fixture, created_manifest(title: "retagged")) do |output|
+        data = File.binread(output)
+        assert_equal 1, data.scan(C2MA_UUID).size
+        File.binwrite(output, data.sub(C2MA_UUID, C2MD_UUID))
+
+        result = C2PA.read(file: output)
+        assert_includes C2PA::VALID_STATES, result["validation_state"]
+        assert_equal "retagged", active_manifest(result)["title"]
+      end
+    end
+  end
+
   # ─── PDF ───────────────────────────────────────────────────────────────────
   #
   # c2pa-rs can read content credentials from a PDF but cannot write them.

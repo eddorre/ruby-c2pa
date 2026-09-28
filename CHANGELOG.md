@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Detached manifests. `C2PA.sign(sidecar:)` writes the manifest to its own
+  `.c2pa` file instead of embedding it, and leaves the asset as it was hashed.
+  `C2PA.read(manifest_file:)` and `C2PA.read_buffer(manifest_data:)` validate an
+  asset against a sidecar. A sidecar with the asset's name and a `.c2pa`
+  extension is found without being named. The verify guard checks the pair and
+  removes both files if it fails.
+- Manifests stored under the `c2md` JUMBF type are read. The specification
+  requires readers to accept them; c2pa-rs 0.91 does, and earlier versions
+  skipped them.
 - Signing and reading EPUB, Word (DOCX), OpenDocument text (ODT) and OpenXPS
   files. The manifest goes in `META-INF/content_credential.c2pa`, and every
   other part of the package is covered by the signature. c2pa-rs could only

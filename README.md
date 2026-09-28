@@ -399,6 +399,40 @@ result = C2PA.read_buffer(data: signed)
 result = C2PA.read_buffer(data: svg_bytes, format: "image/svg+xml")
 ```
 
+### Keeping the manifest in a separate file
+
+Pass `sidecar:` to write the manifest to its own `.c2pa` file instead of
+embedding it. The output is the asset exactly as it was hashed, which is
+usually byte-for-byte the input. Use this when the file can't be modified, or
+when the manifest is served separately.
+
+```ruby
+C2PA.sign(
+  file:        "photo.jpg",
+  output:      "published/photo.jpg",
+  sidecar:     "published/photo.c2pa",
+  certificate: "cert.pem",
+  key:         "key.pem",
+  manifest:    manifest
+)
+```
+
+The asset is only valid together with its sidecar. Changing either one, or
+pairing the sidecar with a different file, makes it invalid.
+
+When a file has no embedded manifest, `C2PA.read` looks beside it for the same
+name with a `.c2pa` extension, so the pair above reads with no extra argument.
+For a sidecar kept anywhere else, name it:
+
+```ruby
+C2PA.read(file: "photo.jpg", manifest_file: "manifests/1234.c2pa")
+C2PA.read_buffer(data: bytes, format: "image/jpeg", manifest_data: sidecar_bytes)
+```
+
+Reading a `.c2pa` file on its own returns the manifest, but it always reports
+`Invalid` with `assertion.dataHash.mismatch` (or the matching BMFF code),
+because there's no asset for the hash to be checked against.
+
 ### Naming your application
 
 Signed files credit `ruby-c2pa` by default. To credit your own application
