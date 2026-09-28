@@ -471,6 +471,7 @@ dependencies = [
  "magnus",
  "rb-sys",
  "serde_json",
+ "zip",
 ]
 
 [[package]]
@@ -4092,6 +4093,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
 dependencies = [
  "crc32fast",
+ "flate2",
  "indexmap 2.14.2",
  "memchr",
  "typed-path",

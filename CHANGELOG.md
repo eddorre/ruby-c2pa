@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Signing and reading EPUB, Word (DOCX), OpenDocument text (ODT) and OpenXPS
+  files. The manifest goes in `META-INF/content_credential.c2pa`, and every
+  other part of the package is covered by the signature. c2pa-rs could only
+  read uncompressed ZIP entries, which no real document uses, so the extension
+  now enables deflate in its zip dependency. `C2PA.read_buffer` needs
+  `format:` for these, since they all start with the same ZIP header.
 - `C2PA::Config#exclude_free_and_skip_boxes`. Set it to false when signing
   MP4, MOV and other BMFF files so that any later change to their `free` and
   `skip` padding boxes breaks the signature. Left unset, c2pa-rs excludes
