@@ -267,8 +267,9 @@ class C2PATest < Minitest::Test
   #
   # They are not placeholders. C2PA writes manifests into real container
   # structures — APP11 segments, iTXt chunks, IFD entries, BMFF uuid boxes,
-  # RIFF chunks, ID3 frames — so the fixtures carry real image detail, real
-  # audio samples, real video frames, and real EXIF in the JPEG. 92 KB total.
+  # RIFF chunks, ID3 frames, ZIP entries — so the fixtures carry real image
+  # detail, real audio samples, real video frames, real EXIF in the JPEG, and
+  # deflated parts in the ZIP packages. About 68 KB total.
 
   SIGNABLE_FORMATS = {
     "tiny.jpg"  => "JPEG",
@@ -280,7 +281,11 @@ class C2PATest < Minitest::Test
     "tiny.wav"  => "WAV",
     "tiny.mp3"  => "MP3",
     "tiny.mp4"  => "MP4",
-    "tiny.mov"  => "MOV (QuickTime)"
+    "tiny.mov"  => "MOV (QuickTime)",
+    "tiny.epub" => "EPUB",
+    "tiny.docx" => "Word (Office Open XML)",
+    "tiny.odt"  => "OpenDocument text",
+    "tiny.oxps" => "OpenXPS"
   }.freeze
 
   SIGNABLE_FORMATS.each do |fixture, label|
@@ -292,6 +297,76 @@ class C2PATest < Minitest::Test
                         "#{label} signed but does not validate"
       end
     end
+  end
+
+  # ─── ZIP-based documents ──────────────────────────────────────────────────
+  #
+  # EPUB, Office Open XML, OpenDocument and OpenXPS are ZIP packages. c2pa-rs
+  # adds the manifest as META-INF/content_credential.c2pa and binds every other
+  # entry with a collection data hash. The fixtures deflate their parts, as
+  # real documents do, which c2pa-rs can only read because the extension
+  # enables the zip crate's deflate feature.
+
+  # Central directory entries as { name => [crc32, local header offset] }.
+  def zip_entries(data)
+    eocd = data.rindex("PK\x05\x06".b)
+    count, _, directory = data.byteslice(eocd + 10, 10).unpack("vVV")
+    entries = {}
+    offset = directory
+    count.times do
+      crc, = data.byteslice(offset + 16, 4).unpack("V")
+      name_length, extra_length, comment_length = data.byteslice(offset + 28, 6).unpack("vvv")
+      local_header, = data.byteslice(offset + 42, 4).unpack("V")
+      entries[data.byteslice(offset + 46, name_length)] = [crc, local_header]
+      offset += 46 + name_length + extra_length + comment_length
+    end
+    entries
+  end
+
+  ZIP_CONTENT_PARTS = {
+    "tiny.epub" => "OEBPS/chapter.xhtml",
+    "tiny.docx" => "word/document.xml",
+    "tiny.odt"  => "content.xml",
+    "tiny.oxps" => "Documents/1/Pages/1.fpage"
+  }.freeze
+
+  ZIP_CONTENT_PARTS.each do |fixture, part|
+    # Signing must add the manifest and leave the document itself alone, or a
+    # valid signature would come at the cost of a file its own app rejects.
+    define_method("test_signing_#{fixture.tr('.', '_')}_keeps_every_part") do
+      sign_fixture(fixture, created_manifest) do |output|
+        before = zip_entries(fixture_bytes(fixture))
+        after = zip_entries(File.binread(output))
+
+        before.each do |name, (crc, _)|
+          assert_equal crc, after.dig(name, 0), "#{name} changed or went missing in the signed #{fixture}"
+        end
+        assert_includes after.keys, "META-INF/content_credential.c2pa"
+      end
+    end
+
+    define_method("test_changing_#{fixture.tr('.', '_')}_content_breaks_the_signature") do
+      sign_fixture(fixture, created_manifest) do |output|
+        signed = File.binread(output)
+        local_header = zip_entries(signed).fetch(part)[1]
+        name_length, extra_length = signed.byteslice(local_header + 26, 4).unpack("vv")
+        target = local_header + 30 + name_length + extra_length + 10
+        signed.setbyte(target, signed.getbyte(target) ^ 0x01)
+        File.binwrite(output, signed)
+
+        result = C2PA.read(file: output)
+        codes = Array(result.dig("validation_results", "activeManifest", "failure")).map { |failure| failure["code"] }
+        assert_equal "Invalid", result["validation_state"]
+        assert_includes codes, "assertion.collectionHash.mismatch"
+      end
+    end
+  end
+
+  # Recorded so that if c2pa-rs learns to tell ZIP formats apart, the hint in
+  # the buffer tests can go.
+  def test_reading_a_zip_document_from_a_buffer_needs_the_format
+    signed = sign_bytes(fixture_bytes("tiny.docx"), BUFFER_FORMATS.fetch("tiny.docx"))
+    assert_raises(C2PA::ReadError) { C2PA.read_buffer(data: signed) }
   end
 
   # ─── PDF ───────────────────────────────────────────────────────────────────
@@ -1007,8 +1082,16 @@ class C2PATest < Minitest::Test
     "tiny.wav"  => "audio/wav",
     "tiny.mp3"  => "audio/mpeg",
     "tiny.mp4"  => "video/mp4",
-    "tiny.mov"  => "video/quicktime"
+    "tiny.mov"  => "video/quicktime",
+    "tiny.epub" => "application/epub+zip",
+    "tiny.docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "tiny.odt"  => "application/vnd.oasis.opendocument.text",
+    "tiny.oxps" => "application/oxps"
   }.freeze
+
+  # Every ZIP-based format starts with the same local file header, so c2pa-rs
+  # cannot tell them apart from the bytes and needs the format to read them.
+  ZIP_FORMATS = BUFFER_FORMATS.values_at("tiny.epub", "tiny.docx", "tiny.odt", "tiny.oxps").freeze
 
   def fixture_bytes(name)
     File.binread(File.join(FIXTURES, name))
@@ -1039,7 +1122,7 @@ class C2PATest < Minitest::Test
       assert_operator signed.bytesize, :>, fixture_bytes(fixture).bytesize,
                       "#{format}: signed output is no larger than the input, so nothing was embedded"
 
-      result = C2PA.read_buffer(data: signed)
+      result = C2PA.read_buffer(data: signed, format: (format if ZIP_FORMATS.include?(format)))
       assert_includes C2PA::VALID_STATES, result["validation_state"],
                       "#{format} signed from a buffer but does not validate"
       assert_equal title, active_manifest(result)["title"]

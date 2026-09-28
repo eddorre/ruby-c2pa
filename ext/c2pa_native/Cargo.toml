@@ -14,6 +14,11 @@ magnus = { version = "0.8", features = [] }
 rb-sys = { version = "0.9.113", default-features = false }
 c2pa = { version = "0.91", features = ["file_io", "pdf", "add_thumbnails"] }
 serde_json = "1"
+# Not used directly. c2pa-rs depends on zip with default features off, which
+# leaves it able to read only stored entries, and real EPUB, Office and
+# OpenDocument files deflate theirs. Cargo unifies features, so enabling
+# deflate here gives it to c2pa-rs. flate2 is already in the tree.
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
 
 [profile.release]
 opt-level = 3

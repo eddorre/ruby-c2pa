@@ -152,8 +152,9 @@ module C2PA
   # Read the C2PA manifest embedded in bytes held in memory.
   #
   # c2pa-rs identifies most formats from the leading bytes and ignores the
-  # hint when the two disagree. The hint matters for formats with no signature
-  # to sniff, such as SVG, which cannot be read without it.
+  # hint when the two disagree. The hint matters for formats it cannot tell
+  # apart by their bytes: SVG, and the ZIP-based documents (EPUB, DOCX, ODT,
+  # OpenXPS), which all begin with the same ZIP header.
   #
   # @param data   [String]      the asset, as a binary string
   # @param format [String, nil] MIME type or extension, e.g. "image/svg+xml"

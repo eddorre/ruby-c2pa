@@ -14,7 +14,7 @@ Regenerating the media fixtures is the one thing that needs extra tooling, and
 only if you are changing them:
 
 ```bash
-brew install ffmpeg webp jpeg-xl exiftool   # macOS
+brew install ffmpeg webp jpeg-xl exiftool   # macOS; zip ships with it
 ./test/fixtures/generate.sh
 ```
 

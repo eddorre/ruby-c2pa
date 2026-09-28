@@ -599,9 +599,30 @@ signed, read back, and asserted to validate.
 | MOV | `video/quicktime` |
 | MP3 | `audio/mpeg` |
 | WAV | `audio/wav` |
+| EPUB | `application/epub+zip` |
+| Word (DOCX) | `application/vnd.openxmlformats-officedocument.wordprocessingml.document` |
+| OpenDocument text (ODT) | `application/vnd.oasis.opendocument.text` |
+| OpenXPS | `application/oxps` |
 | PDF | `application/pdf` | read only, see below |
 
 The format is detected automatically from the file extension.
+
+### EPUB, Office and OpenDocument files
+
+These formats are ZIP packages. The manifest is added as
+`META-INF/content_credential.c2pa`, and every other part of the package is
+covered by the signature, so editing the document, or adding or removing a
+file in it, makes it invalid. The document still opens in its usual app after
+signing.
+
+c2pa-rs lists the other Office Open XML and OpenDocument types as well: Excel
+and PowerPoint, their macro-enabled forms, OpenDocument spreadsheets,
+presentations, drawings and templates. They use the same code, but only the
+four above have fixtures in the suite.
+
+When reading one of these from memory, pass `format:` to `C2PA.read_buffer`.
+They all begin with the same ZIP header, so c2pa-rs can't identify them from
+the bytes alone.
 
 JPEG XL must be in the ISOBMFF container form. A bare codestream has no boxes
 to hold a manifest, and c2pa-rs rejects it.
@@ -633,10 +654,11 @@ sources, so they carry no third-party content and no licence obligations. They
 are deliberately real files rather than placeholders — 160×120 images with
 actual detail, real audio samples, real video frames, and EXIF metadata on the
 JPEG — because C2PA writes into container structures that an empty file would
-not exercise. All ten total 92 KB.
+not exercise. The PDF and the four ZIP-based documents are written by hand in
+the same script. All fifteen total about 68 KB.
 
-Regenerating them needs `ffmpeg`, `cjxl` and `exiftool`; running the tests does
-not.
+Regenerating them needs `ffmpeg`, `cwebp`, `cjxl`, `exiftool` and `zip`; running
+the tests does not.
 
 Signing certificates are generated on demand, one chain per key type, so every
 supported algorithm is covered:
