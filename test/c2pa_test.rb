@@ -1583,17 +1583,36 @@ class C2PATest < Minitest::Test
     (cpu.() - cpu_start) / (wall.() - wall_start)
   end
 
+  # Attempts before the measurement is believed. One sample can read low for
+  # reasons that have nothing to do with the lock: a shared CI runner with
+  # other jobs on it leaves the two threads competing for one core, and the
+  # ratio then approaches 1.0 no matter what the native call does. This test
+  # read 1.06 on a macOS runner once, and passed on a re-run of the same
+  # commit.
+  #
+  # Retrying cannot hide a held lock. With the lock held the ratio is about
+  # 1.0 on every attempt, which the four mutation runs behind this test
+  # showed: 0.94, 1.00, 1.00, 1.00, and 0.90 for the trampoline mutation.
+  # A held lock does not produce an outlier above the threshold; a busy
+  # machine produces one below it.
+  PARALLELISM_ATTEMPTS = 3
+
   def assert_runs_alongside_ruby(operation, &block)
     assert_certificates_present
     if Etc.nprocessors < 2
       flunk "this test needs two CPUs to observe parallelism; this machine reports #{Etc.nprocessors}"
     end
 
-    ratio = cpu_parallelism(&block)
-    assert_operator ratio, :>, PARALLELISM_THRESHOLD,
-                    "#{operation} consumed #{ratio.round(2)} CPU-seconds per wall-second alongside a " \
-                    "Ruby thread; about 1.0 means the GVL is held for the native call, about 2.0 " \
-                    "means it is released"
+    ratios = []
+    PARALLELISM_ATTEMPTS.times do
+      ratios << cpu_parallelism(&block)
+      break if ratios.last > PARALLELISM_THRESHOLD
+    end
+
+    assert_operator ratios.max, :>, PARALLELISM_THRESHOLD,
+                    "#{operation} consumed #{ratios.map { |r| r.round(2) }.join(', ')} CPU-seconds " \
+                    "per wall-second alongside a Ruby thread over #{ratios.size} attempts; about 1.0 " \
+                    "means the GVL is held for the native call, about 2.0 means it is released"
   end
 
   def large_asset
