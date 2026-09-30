@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `C2PA::Config#allow_redirects`. Set it to false to stop network fetches
   during reading and validation from following redirects. Left unset, c2pa-rs
   follows redirects but refuses those that point at internal addresses.
+- Signing PDFs. c2pa-rs added a PDF writer in 0.91.1, after years of having
+  none, so `C2PA.sign` and `C2PA.sign_buffer` now accept PDFs and the manifest
+  goes into the document's associated files. Every release up to 0.5.0
+  documented PDF signing as impossible, which it was at the time.
 - `Manifest#add_ingredient` takes `digital_source_type:`, recording how an
   ingredient with no content credentials was produced. Giving one for a file
   that carries credentials raises `C2PA::InvalidManifestError`.
@@ -41,8 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `parameters` includes `relatedAssertions`. c2pa-rs 0.91 checks these links
   when reading but cannot create them, so the gem has no genuine value to
   send.
-- Built against c2pa-rs 0.91.0. That release validates manifests before
-  writing by default; the gem turns that off and keeps its own
+- Built against c2pa-rs 0.91.1, which needs Rust 1.96 or newer to compile.
+  0.91.1 also carries a batch of hardening fixes over 0.91.0: a panic on
+  oversized XMP when writing JPEG APP1, an underflow in XMP trailer parsing,
+  unbounded TIFF IFD entry counts, uncapped ID3v2 frame decompression, and
+  corrections to OCSP responder validation. That release validates manifests
+  before writing by default; the gem turns that off and keeps its own
   verify-after-sign guard, which reads the finished output back and checks
   its hashes. Errors and the `verify:` option behave as before.
 
