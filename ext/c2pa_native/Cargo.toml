@@ -12,7 +12,7 @@ magnus = { version = "0.8", features = [] }
 # Only for rb_thread_call_without_gvl, which magnus does not wrap. Kept at the
 # range magnus itself depends on so Cargo resolves a single copy.
 rb-sys = { version = "0.9.113", default-features = false }
-c2pa = { version = "0.91", features = ["file_io", "pdf", "add_thumbnails"] }
+c2pa = { version = "0.91.1", features = ["file_io", "pdf", "add_thumbnails"] }
 serde_json = "1"
 # Not used directly. c2pa-rs depends on zip with default features off, which
 # leaves it able to read only stored entries, and real EPUB, Office and

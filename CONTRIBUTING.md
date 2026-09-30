@@ -29,7 +29,7 @@ that suite passed while the gem:
 
 - aborted the Ruby process on any TIFF input
 - emitted manifests that modern verifiers reject
-- advertised PDF signing, which c2pa-rs cannot do at any version
+- advertised PDF signing, which no c2pa-rs release could do until 0.91.1
 - documented an editing workflow that has never produced a valid file
 
 The suite passed because its assertions compared the code to itself:
@@ -75,7 +75,7 @@ test is specific as well as present.
 Mutating the Rust in `ext/c2pa_native/` counts double — it proves the test
 reaches through the FFI boundary rather than stopping at Ruby.
 
-### Three traps, all hit while building this suite
+### Four traps, all hit while building this suite
 
 **A mutation that does not do what you think.** A NUL-handling test appeared to
 survive a mutation that stripped NUL bytes, which would have meant the test was
@@ -99,6 +99,15 @@ time waiting on the lock after a stat, not inside the native call. The test
 that works measures CPU parallelism, which waiting cannot inflate. When a
 timing test passes under the mutation it was written to catch, suspect the
 probe before the code.
+
+**An assertion satisfied by the wrong thing.** A test for "signing a PDF
+leaves it a readable PDF" checked that the output still contained
+`ruby-c2pa`, the text on the fixture's page. It passed under a mutation that
+rewrote the page content before signing, because `ruby-c2pa` also appears in
+the manifest's claim generator: the assertion was reading the manifest, not
+the document. Matching the page's text operator, `(ruby-c2pa) Tj`, fixed it.
+When a string you assert on could come from more than one place in the
+output, match something only the thing under test can produce.
 
 ## Where there is no oracle
 

@@ -285,7 +285,8 @@ class C2PATest < Minitest::Test
     "tiny.epub" => "EPUB",
     "tiny.docx" => "Word (Office Open XML)",
     "tiny.odt"  => "OpenDocument text",
-    "tiny.oxps" => "OpenXPS"
+    "tiny.oxps" => "OpenXPS",
+    "tiny.pdf"  => "PDF"
   }.freeze
 
   SIGNABLE_FORMATS.each do |fixture, label|
@@ -574,29 +575,46 @@ class C2PATest < Minitest::Test
 
   # ─── PDF ───────────────────────────────────────────────────────────────────
   #
-  # c2pa-rs can read content credentials from a PDF but cannot write them.
-  # pdf_io.rs returns None from get_writer and NotImplemented from
-  # save_cai_store, and upstream closed the request to expose a writer in
-  # December 2025. This is true at every version, so the README must not
-  # advertise PDF signing.
+  # Signing a PDF was impossible until c2pa-rs 0.91.1. pdf_io.rs returned None
+  # from get_writer and NotImplemented from every write path, upstream closed
+  # the request for a writer in December 2025, and releases of this gem said
+  # so. c2pa-rs reopened the work and implemented PDF manifest writing in
+  # 0.91.1 (contentauth/c2pa-rs#2700), so the gem signs PDFs with no change of
+  # its own. The format matrices above cover the round trip; what follows
+  # covers the read path and the boundary the matrices do not reach.
   #
-  # Reading is enabled through the `pdf` cargo feature. The suite can prove
-  # the handler is active — it parses a PDF and looks for credentials — but not
-  # that it returns a manifest when one is present, because nothing available
-  # can produce a C2PA-signed PDF. c2pa-rs cannot, and neither can any local
-  # tool. That gap is stated in the README rather than hidden.
+  # A manifest goes into the PDF's associated files. The signed output is far
+  # larger than these fixtures because the manifest carries a certificate
+  # chain, which dwarfs a 583-byte document.
 
-  def test_pdf_signing_is_not_supported
-    assert_certificates_present
-    dir = Dir.mktmpdir
-
-    error = assert_raises(C2PA::SigningError) do
-      C2PA.sign(file: File.join(FIXTURES, "tiny.pdf"), output: File.join(dir, "signed.pdf"),
-                certificate: CERT, key: KEY, manifest: created_manifest)
+  def test_a_signed_pdf_carries_its_manifest_in_the_document
+    read_back(created_manifest(title: "signed document"), fixture: "tiny.pdf") do |active, result|
+      assert_equal "signed document", active["title"]
+      assert_includes C2PA::VALID_STATES, result["validation_state"]
     end
-    assert_match(/unsupported/i, error.message)
-  ensure
-    FileUtils.remove_entry(dir) if dir && File.exist?(dir)
+  end
+
+  # Signing must not damage the document. A PDF that no longer parses would
+  # still read back as Valid through c2pa-rs, since the manifest is intact
+  # even when the pages are not.
+  def test_signing_a_pdf_leaves_it_a_readable_pdf
+    sign_fixture("tiny.pdf", created_manifest) do |output|
+      data = File.binread(output)
+
+      assert data.start_with?("%PDF-"), "the signed file is not a PDF"
+      assert_includes data, "%%EOF"
+
+      # The page's text-showing operator, not the bare string: "ruby-c2pa"
+      # alone also appears in the manifest's claim generator, so asserting on
+      # it would pass for a signed file carrying no document at all. A
+      # mutation that rewrote the page content before signing proved exactly
+      # that.
+      assert_includes data, "(ruby-c2pa) Tj",
+                      "the page content from the source document is missing"
+      # c2pa-rs rewrites the file through lopdf, which normalises the object
+      # syntax, so match the fixture's page geometry rather than any spacing.
+      assert_includes data, "/MediaBox[0 0 200 100]"
+    end
   end
 
   # With the feature off this raises "type is unsupported" without opening
@@ -1289,7 +1307,8 @@ class C2PATest < Minitest::Test
     "tiny.epub" => "application/epub+zip",
     "tiny.docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "tiny.odt"  => "application/vnd.oasis.opendocument.text",
-    "tiny.oxps" => "application/oxps"
+    "tiny.oxps" => "application/oxps",
+    "tiny.pdf"  => "application/pdf"
   }.freeze
 
   # Every ZIP-based format starts with the same local file header, so c2pa-rs

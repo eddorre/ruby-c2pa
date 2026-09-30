@@ -27,7 +27,9 @@ The binding layer is a native Ruby extension written in Rust using [magnus](http
 ## Requirements
 
 - Ruby >= 3.0
-- Rust and Cargo (to compile the native library)
+- Rust >= 1.96 and Cargo (to compile the native library). c2pa-rs 0.91 sets
+  that floor; an older toolchain stops with
+  `c2pa@0.91.1 requires rustc 1.96.0` during installation.
 - OpenSSL (usually already present on macOS and Linux)
 
 ### Installing Rust
@@ -456,7 +458,7 @@ The signed manifest then reads:
   "name": "Acme Editor",
   "version": "2.0",
   "org.contentauth.c2pa_rs": "0.90.22",
-  "org.rubygems.ruby_c2pa": "0.5.0"
+  "org.rubygems.ruby_c2pa": "0.6.0"
 }
 ```
 
@@ -637,7 +639,7 @@ signed, read back, and asserted to validate.
 | Word (DOCX) | `application/vnd.openxmlformats-officedocument.wordprocessingml.document` |
 | OpenDocument text (ODT) | `application/vnd.oasis.opendocument.text` |
 | OpenXPS | `application/oxps` |
-| PDF | `application/pdf` | read only, see below |
+| PDF | `application/pdf` |
 
 The format is detected automatically from the file extension.
 
@@ -661,24 +663,31 @@ the bytes alone.
 JPEG XL must be in the ISOBMFF container form. A bare codestream has no boxes
 to hold a manifest, and c2pa-rs rejects it.
 
-### PDF is read-only
+### PDF
 
-`C2PA.read` works on a PDF that carries content credentials, such as one signed
-by Adobe Acrobat. `C2PA.sign` does not: c2pa-rs has no PDF writer at any
-version. `get_writer` returns `None` and `save_cai_store` returns
-`NotImplemented`, and upstream closed the request to expose one in December
-2025 (contentauth/c2pa-rs#527). Signing a PDF raises `C2PA::SigningError`
-with `type is unsupported`.
+PDFs sign and read like any other format. The manifest goes into the
+document's associated files, as `/AFRelationship /C2PA_Manifest`, and the file
+still opens in a PDF reader afterwards.
 
-Earlier releases of this gem listed PDF as signable. That was never correct.
+```ruby
+C2PA.sign(
+  file:        "contract.pdf",
+  output:      "contract_signed.pdf",
+  certificate: "cert.pem",
+  key:         "key.pem",
+  manifest:    manifest
+)
+```
 
-One limit on what the test suite can show. It proves the PDF handler is active,
-by reading a PDF with no credentials and getting `no JUMBF data found` rather
-than `type is unsupported`. It cannot prove that a signed PDF returns its
-manifest, because nothing available can produce one: c2pa-rs cannot write
-them, and no local tool can either. The code doing the reading is c2pa-rs's
-own and is tested upstream; what is untested here is only this gem's
-integration with the success path.
+This is new. c2pa-rs had no PDF writer until 0.91.1 (September 2026):
+`get_writer` returned `None`, every write path returned `NotImplemented`, and
+upstream had closed the request for one in December 2025. Releases of this gem
+up to 0.5.0 said PDF signing was impossible, and while they shipped that was
+true. It is not true now, and 0.6.0 is the first release where a PDF signs.
+
+Expect the signed file to be much larger than the original when the document
+is small. The manifest carries a full certificate chain, which is a few
+kilobytes whatever the document weighs.
 
 ### Test fixtures
 
