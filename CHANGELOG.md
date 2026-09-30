@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-09-29
+
+Adds capability on top of 0.5.0. Nothing is removed and no existing call
+changes behaviour, so this is a minor release. Building it needs Rust 1.96
+or newer, which c2pa-rs 0.91 requires.
+
 ### Added
 
 - Detached manifests. `C2PA.sign(sidecar:)` writes the manifest to its own
@@ -230,7 +236,8 @@ Tagged retroactively. See the v0.2.1 tag for the defects it shipped with.
 
 Tagged retroactively.
 
-[Unreleased]: https://github.com/eddorre/ruby-c2pa/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/eddorre/ruby-c2pa/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/eddorre/ruby-c2pa/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/eddorre/ruby-c2pa/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/eddorre/ruby-c2pa/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/eddorre/ruby-c2pa/compare/v0.2.1...v0.3.0
