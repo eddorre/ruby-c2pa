@@ -1695,8 +1695,13 @@ class C2PATest < Minitest::Test
   # The extension is compiled at install time, so without a lockfile every
   # installer resolves the dependency tree afresh. That is how 0.2.1 shipped
   # against a broken atree and aborted the Ruby process on TIFF input.
+  #
+  # The lockfile sits at the workspace root, and Cargo only uses it when the
+  # root Cargo.toml is installed alongside it. Without that manifest the crate
+  # builds as a standalone package and resolves afresh, lockfile or not.
   def test_the_gem_ships_a_lockfile_so_installs_are_reproducible
-    assert_includes gemspec.files, "ext/c2pa_native/Cargo.lock"
+    assert_includes gemspec.files, "Cargo.lock"
+    assert_includes gemspec.files, "Cargo.toml"
   end
 
   def test_packaged_files_all_exist

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Precompiled gems for `x86_64-linux`, `aarch64-linux` and their musl
+  variants, for Ruby 3.1 to 4.0. Installing on those platforms no longer needs
+  Rust or libclang, and takes seconds rather than several minutes. Other
+  platforms, macOS included, still install the source gem and compile it.
+
+### Changed
+
+- The crate now sits under a Cargo workspace at the repository root, which is
+  where `Cargo.lock` and the release profile live. rb-sys's cross-compile
+  tasks need the workspace to find the crate.
+
 ## [0.6.0] — 2026-09-29
 
 Adds capability on top of 0.5.0. Nothing is removed and no existing call

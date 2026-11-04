@@ -5,7 +5,14 @@ require_relative "c2pa/actions"
 require_relative "c2pa/digital_source_types"
 require_relative "c2pa/config"
 require_relative "c2pa/manifest"
-require "c2pa/c2pa_native"
+# A precompiled gem carries one extension per Ruby minor version, under
+# lib/c2pa/<major.minor>/. A source install compiles a single one into
+# lib/c2pa/ instead.
+begin
+  require "c2pa/#{RUBY_VERSION[/\d+\.\d+/]}/c2pa_native"
+rescue LoadError
+  require "c2pa/c2pa_native"
+end
 
 module C2PA
   # Validation states that mean a signed asset is good.

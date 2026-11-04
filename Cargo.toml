@@ -1,0 +1,12 @@
+# A workspace at the root lets rb-sys's rake tasks find the crate, which they
+# need to cross-compile the precompiled gems. Cargo honours profiles only here,
+# not in member crates, so the release profile lives in this file.
+[workspace]
+members = ["ext/c2pa_native"]
+resolver = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

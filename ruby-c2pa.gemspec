@@ -20,19 +20,21 @@ Gem::Specification.new do |spec|
   # depended on what had been compiled on the machine that ran `gem build` —
   # 1.3 MB of dependency build-script output shipped in 0.2.1.
   #
-  # Cargo.lock is included deliberately. The extension is compiled at install
-  # time, so without it every installer resolves the dependency tree afresh.
-  # That is how 0.2.1 shipped against a broken atree and aborted the Ruby
-  # process on TIFF input.
+  # Cargo.lock is included deliberately, with the workspace Cargo.toml that
+  # makes Cargo use it and carries the release profile. The extension is
+  # compiled at install time, so without it every installer resolves the
+  # dependency tree afresh. That is how 0.2.1 shipped against a broken atree
+  # and aborted the Ruby process on TIFF input.
   spec.files = [
     "LICENSE",
     "README.md",
     "CHANGELOG.md",
     "CONTRIBUTING.md",
+    "Cargo.toml",
+    "Cargo.lock",
     "Rakefile",
     "ruby-c2pa.gemspec",
     "ext/c2pa_native/Cargo.toml",
-    "ext/c2pa_native/Cargo.lock",
     "ext/c2pa_native/extconf.rb",
     *Dir["ext/c2pa_native/src/**/*.rs"],
     *Dir["lib/**/*.rb"]

@@ -19,9 +19,3 @@ serde_json = "1"
 # OpenDocument files deflate theirs. Cargo unifies features, so enabling
 # deflate here gives it to c2pa-rs. flate2 is already in the tree.
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
-
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-strip = true

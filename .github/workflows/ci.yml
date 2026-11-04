@@ -29,7 +29,7 @@ jobs:
 
     env:
       # Skip LTO and codegen-units=1 for tests. The release profile in
-      # ext/c2pa_native/Cargo.toml is tuned for shipping, and compiling 425
+      # Cargo.toml is tuned for shipping, and compiling 425
       # crates — including OpenSSL from source — with it on every push is
       # needless. Note this means CI exercises a debug build, which has integer
       # overflow checks the released artifact does not.
@@ -49,8 +49,6 @@ jobs:
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ext/c2pa_native
 
       - name: Generate signing certificates
         # `rake test` depends on this task, so this step is not strictly
