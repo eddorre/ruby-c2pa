@@ -8,11 +8,17 @@ Gemfile.lock
 
 # Rust build artifacts
 ext/c2pa_native/target/
+/target/
 
 # Compiled native extension
 lib/c2pa/c2pa_native.bundle
 lib/c2pa/c2pa_native.so
 lib/c2pa/c2pa_native.dll
+# Per-Ruby-version extensions from cross-compiling
+lib/c2pa/[0-9]*/
+
+# Gems built by `rake native gem` and the release workflow
+pkg/
 
 # rake-compiler temp directory
 tmp/

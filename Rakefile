@@ -1,11 +1,25 @@
-require "rake/extensiontask"
+require "rb_sys/extensiontask"
 require "rake/testtask"
 
 GEMSPEC = Gem::Specification.load("ruby-c2pa.gemspec")
 
-Rake::ExtensionTask.new("c2pa_native", GEMSPEC) do |ext|
+# Precompiled gems are built for these platforms by the release workflow, so
+# installing on them needs no Rust toolchain. Any other platform falls back to
+# the source gem and compiles at install time, as every release did before.
+#
+# macOS is absent because openssl-src fails to build OpenSSL under the osxcross
+# toolchain rb-sys-dock uses for Darwin targets.
+CROSS_PLATFORMS = %w[
+  x86_64-linux
+  x86_64-linux-musl
+  aarch64-linux
+  aarch64-linux-musl
+].freeze
+
+RbSys::ExtensionTask.new("c2pa_native", GEMSPEC) do |ext|
   ext.lib_dir = "lib/c2pa"
-  ext.source_pattern = "**/*.{rs,toml,rb}"
+  ext.cross_compile = true
+  ext.cross_platform = CROSS_PLATFORMS
 end
 
 Rake::TestTask.new(:test) do |t|
