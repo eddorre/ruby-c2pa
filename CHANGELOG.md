@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Built against c2pa-rs 0.91.11. The releases since 0.91.1 are backported
+  fixes: BMFF Merkle validation hardening, SVG root namespacing, legacy MOV
+  files without an `ftyp` box, bounded remote manifest reads, and a run of
+  OCSP and time-stamp validation corrections. Validation is stricter in places:
+  certificate key usage rules are now enforced, so a credential that broke
+  them and used to validate may no longer. c2pa-rs moved to zip 9, and the
+  gem's zip dependency follows so deflated EPUB, Office and OpenDocument
+  entries still read.
+- Requires rb_sys 0.9.129 or newer. Older versions write an empty install
+  name into the library, which the macOS 27 loader rejects.
+
 ## [0.6.0] — 2026-09-29
 
 Adds capability on top of 0.5.0. Nothing is removed and no existing call
