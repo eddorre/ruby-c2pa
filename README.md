@@ -29,7 +29,10 @@ The binding layer is a native Ruby extension written in Rust using [magnus](http
 - Ruby >= 3.0
 - Rust >= 1.96 and Cargo (to compile the native library). c2pa-rs 0.91 sets
   that floor; an older toolchain stops with
-  `c2pa@0.91.1 requires rustc 1.96.0` during installation.
+  `c2pa@0.91.11 requires rustc 1.96.0` during installation. On macOS 27, use
+  Rust 1.98 or newer: earlier versions strip the library in a way the macOS 27
+  loader rejects, and `require "c2pa"` fails with
+  `mis-aligned LINKEDIT string pool`.
 - OpenSSL (usually already present on macOS and Linux)
 
 ### Installing Rust
